@@ -23,6 +23,7 @@ import org.json.JSONException;
 import org.json.JSONObject;
 import org.xbill.DNS.AAAARecord;
 import org.xbill.DNS.ARecord;
+import org.xbill.DNS.CNAMERecord;
 import org.xbill.DNS.DClass;
 import org.xbill.DNS.Flags;
 import org.xbill.DNS.Header;
@@ -82,6 +83,13 @@ public class DDNS {
 				new Name((host.endsWith(".") ? host : host + ".").replace('_', '-'));
 		ArrayList<Record> records = new ArrayList<>(), records6 = new ArrayList<>();
 		for (String s : value.split("[,;]")) {
+			if (s.matches(".*[A-Z|a-z].*")) {
+				CNAMERecord record = new CNAMERecord(origin, DClass.IN, ttl,
+						new Name(s.endsWith(".") ? s : s + "."));
+				records.add(record);
+				records6.add(record);
+				continue;
+			}
 			String[] ss = s.split("\\.");
 			if (ss.length < 4) {
 				continue;
@@ -513,7 +521,6 @@ public class DDNS {
 						}
 					}
 				}
-				System.out.println(name);
 				Metric.put("ddns.resolve", 1, "rcode", Rcode.string(rcode), "name", name,
 						"type", question == null ? "null" : Type.string(question.getType()));
 				final byte[] respData = response.toWire();
