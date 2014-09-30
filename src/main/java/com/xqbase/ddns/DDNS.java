@@ -497,12 +497,27 @@ public class DDNS {
 				if (response == null) {
 					continue;
 				}
+				int rcode = response.getRcode();
 				Record question = request.getQuestion();
-				Metric.put("ddns.resolve", 1,
-						"type", question == null ? "null" : Type.string(question.getType()),
-						"rcode", Rcode.string(response.getRcode()));
+				String name = "null";
+				if (rcode == Rcode.NOERROR && question != null) {
+					Name name_ = question.getName();
+					if (name_ != null) {
+						int labels = name_.labels();
+						if (labels >= 3 && name_.getLabelString(labels - 1).isEmpty()) {
+							name = name_.getLabelString(labels - 3).toLowerCase() +
+									"." + name_.getLabelString(labels - 2).toLowerCase();
+						} else if (labels >= 2) {
+							name = name_.getLabelString(labels - 2).toLowerCase() +
+									"." + name_.getLabelString(labels - 1).toLowerCase();
+						}
+					}
+				}
+				System.out.println(name);
+				Metric.put("ddns.resolve", 1, "rcode", Rcode.string(rcode), "name", name,
+						"type", question == null ? "null" : Type.string(question.getType()));
 				final byte[] respData = response.toWire();
-				if (dnss.isEmpty() || response.getRcode() < Rcode.NXDOMAIN) {
+				if (dnss.isEmpty() || rcode < Rcode.NXDOMAIN) {
 					// Send
 					dataQueue.offer(new DataEntry(packet.getSocketAddress(), respData));
 				} else {
