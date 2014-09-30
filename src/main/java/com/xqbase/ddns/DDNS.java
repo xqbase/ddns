@@ -40,6 +40,8 @@ import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
 import com.sun.net.httpserver.HttpServer;
 import com.sun.org.apache.xerces.internal.impl.dv.util.Base64;
+import com.xqbase.metric.aggregator.ManagementMonitor;
+import com.xqbase.metric.aggregator.Metric;
 import com.xqbase.util.ByteArrayQueue;
 import com.xqbase.util.Bytes;
 import com.xqbase.util.Conf;
@@ -206,7 +208,8 @@ public class DDNS {
 		
 		String host = question.getName().toString(true).toLowerCase();
 		Record[] records;
-		switch (question.getType()) {
+		int type = question.getType();
+		switch (type) {
 		case Type.A:
 		case Type.ANY:
 			records = resolve(host, staticARecords, dynamicARecords);
@@ -239,7 +242,7 @@ public class DDNS {
 			response.addRecord(record, Section.ANSWER);
 		}
 /*
-		if (question.getType() != Type.NS) {
+		if (type != Type.NS) {
 			for (Record[] records_ : nsRecords.values()) {
 				for (Record record : records_) {
 					response.addRecord(record, Section.AUTHORITY);
@@ -332,6 +335,7 @@ public class DDNS {
 		int mxPriority = Numbers.parseInt(p.getProperty("priority.mx"), 10);
 		int staticTtl = Numbers.parseInt(p.getProperty("ttl.static"), 3600);
 		final int dynamicTtl = Numbers.parseInt(p.getProperty("ttl.dynamic"), 10);
+		// API Client
 		String addrApiUrl = p.getProperty("api.addr");
 		if (addrApiUrl != null) {
 			final HttpPool addrApi = new HttpPool(addrApiUrl, dynamicTtl * 2000);
@@ -351,12 +355,14 @@ public class DDNS {
 				}
 			});
 		}
+		// External DNS
 		String dns = p.getProperty("dns");
-		if (dns != null) {
+		if (dns != null && !dns.isEmpty()) {
 			for (String s : dns.split("[,;]")) {
 				dnss.add(new InetSocketAddress(s, 53));
 			}
 		}
+		// HTTP Updating Service
 		int httpPort = Numbers.parseInt(p.getProperty("http.port"), 5380);
 		HttpServer httpServer = null;
 		if (httpPort > 0) {
@@ -381,6 +387,21 @@ public class DDNS {
 				Log.e(e);
 			}
 		}
+		// Metric
+		ArrayList<InetSocketAddress> addrs = new ArrayList<>();
+		String addresses = p.getProperty("metric.collectors");
+		if (addresses != null) {
+			String[] s = addresses.split("[,;]");
+			for (int i = 0; i < s.length; i ++) {
+				String[] ss = s[i].split("[:/]");
+				if (ss.length >= 2) {
+					addrs.add(new InetSocketAddress(ss[0],
+							Numbers.parseInt(ss[1], 5514)));
+				}
+			}
+		}
+		Metric.startup(addrs.toArray(new InetSocketAddress[0]));
+		Executors.schedule(new ManagementMonitor("ddns.server"), 0, 5000);
 
 		for (Map.Entry<?, ?> entry : p.entrySet()) {
 			String key = (String) entry.getKey();
@@ -476,6 +497,10 @@ public class DDNS {
 				if (response == null) {
 					continue;
 				}
+				Record question = request.getQuestion();
+				Metric.put("ddns.resolve", 1,
+						"type", question == null ? "null" : Type.string(question.getType()),
+						"rcode", Rcode.string(response.getRcode()));
 				final byte[] respData = response.toWire();
 				if (dnss.isEmpty() || response.getRcode() < Rcode.NXDOMAIN) {
 					// Send
@@ -501,8 +526,9 @@ public class DDNS {
 		if (httpServer != null) {
 			httpServer.stop(0);
 		}
+		Metric.shutdown();
 		Executors.shutdown();
-		Conf.closeLogger(Log.getAndSet(logger));
 		Log.i("DDNS Stopped");
+		Conf.closeLogger(Log.getAndSet(logger));
 	}
 }

@@ -1,0 +1,2 @@
+ddns //IS --DisplayName="Dynamic DNS Service" --Startup=auto --LogPath="%CD%\logs" --Jvm="C:\Program Files\Java\jre7\bin\client\jvm.dll" --StartMode=jvm --StopMode=jvm --StartClass=com.xqbase.ddns.DDNS --StopClass=com.xqbase.ddns.DDNS --StopParams=stop --Classpath="%CD%\lib\ddns.jar"
+ddns //RS
