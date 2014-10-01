@@ -75,6 +75,9 @@ public class DDNS {
 	private static ArrayList<String> wildcards = new ArrayList<>();
 	private static ArrayList<InetSocketAddress> dnss = new ArrayList<>();
 	private static Properties dynamicRecords;
+	private static HashMap<String, Integer> countMap = new HashMap<>();
+	private static long accessed = 0;
+	private static int dosPeriod, dosRequests;
 
 	private static void updateRecords(Map<String, Record[]> aRecords,
 			Map<String, Record[]> aaaaRecords, String host, String value,
@@ -137,6 +140,29 @@ public class DDNS {
 		} catch (IOException | JSONException e) {
 			Log.e(e);
 		}
+	}
+
+	private static boolean blocked(String ip) {
+		if (dosPeriod == 0 || dosRequests == 0) {
+			return false;
+		}
+		long now = System.currentTimeMillis();
+		if (now > accessed + dosPeriod) {
+			countMap.clear();
+			accessed = now;
+		}
+		Integer count_ = countMap.get(ip);
+		int count = (count_ == null ? 0 : count_.intValue());
+		count ++;
+		countMap.put(ip, Integer.valueOf(count));
+		if (count < dosRequests) {
+			// Remote IP Blocked
+			return false;
+		}
+		if (count % dosRequests == 0) {
+			Log.w("DoS Attack from " + ip + ", requests = " + count);
+		}
+		return true;
 	}
 
 	/** 
@@ -343,6 +369,9 @@ public class DDNS {
 		int mxPriority = Numbers.parseInt(p.getProperty("priority.mx"), 10);
 		int staticTtl = Numbers.parseInt(p.getProperty("ttl.static"), 3600);
 		final int dynamicTtl = Numbers.parseInt(p.getProperty("ttl.dynamic"), 10);
+		// DoS
+		dosPeriod = Numbers.parseInt(p.getProperty("dos.period")) * 1000;
+		dosRequests = Numbers.parseInt(p.getProperty("dos.requests"));
 		// API Client
 		String addrApiUrl = p.getProperty("api.addr");
 		if (addrApiUrl != null) {
@@ -488,9 +517,14 @@ public class DDNS {
 			while (!Thread.interrupted()) {
 				// Receive
 				byte[] buf = new byte[65536];
-				final DatagramPacket packet = new DatagramPacket(buf, buf.length);
+				DatagramPacket packet = new DatagramPacket(buf, buf.length);
 				// Blocked, or closed by shutdown handler
 				socket.receive(packet);
+				// DoS Filtering
+				final SocketAddress remote = packet.getSocketAddress();
+				if (blocked(((InetSocketAddress) remote).getAddress().getHostAddress())) {
+					continue;
+				}
 				dump(packet, false);
 				final byte[] reqData = Bytes.left(buf, packet.getLength());
 				Message request;
@@ -526,13 +560,13 @@ public class DDNS {
 				final byte[] respData = response.toWire();
 				if (dnss.isEmpty() || rcode < Rcode.NXDOMAIN) {
 					// Send
-					dataQueue.offer(new DataEntry(packet.getSocketAddress(), respData));
+					dataQueue.offer(new DataEntry(remote, respData));
 				} else {
 					// Call DNS Service in Branch Thread
 					Executors.execute(new Runnable() {
 						@Override
 						public void run() {
-							serviceDns(packet.getSocketAddress(), reqData, respData);
+							serviceDns(remote, reqData, respData);
 						}
 					});
 				}
