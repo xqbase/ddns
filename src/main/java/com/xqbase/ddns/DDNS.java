@@ -41,8 +41,9 @@ import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
 import com.sun.net.httpserver.HttpServer;
 import com.sun.org.apache.xerces.internal.impl.dv.util.Base64;
-import com.xqbase.metric.aggregator.ManagementMonitor;
 import com.xqbase.metric.aggregator.Metric;
+import com.xqbase.metric.client.ManagementMonitor;
+import com.xqbase.metric.client.MetricClient;
 import com.xqbase.util.ByteArrayQueue;
 import com.xqbase.util.Bytes;
 import com.xqbase.util.Conf;
@@ -437,7 +438,7 @@ public class DDNS {
 				}
 			}
 		}
-		Metric.startup(addrs.toArray(new InetSocketAddress[0]));
+		MetricClient.startup(addrs.toArray(new InetSocketAddress[0]));
 		Executors.schedule(new ManagementMonitor("ddns.server"), 0, 5000);
 
 		for (Map.Entry<?, ?> entry : p.entrySet()) {
@@ -582,7 +583,7 @@ public class DDNS {
 		if (httpServer != null) {
 			httpServer.stop(0);
 		}
-		Metric.shutdown();
+		MetricClient.shutdown();
 		Executors.shutdown();
 		Log.i("DDNS Stopped");
 		Conf.closeLogger(Log.getAndSet(logger));
