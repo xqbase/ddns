@@ -11,6 +11,7 @@ import java.net.SocketTimeoutException;
 import java.net.URI;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
@@ -75,7 +76,7 @@ public class DDNS {
 			mxRecords = new HashMap<>();
 	private static ArrayList<String> wildcards = new ArrayList<>();
 	private static ArrayList<InetSocketAddress> dnss = new ArrayList<>();
-	private static Properties dynamicRecords;
+	private static Properties dynamicProperties;
 	private static HashMap<String, Integer> countMap = new HashMap<>();
 	private static long accessed = 0;
 	private static int dosPeriod, dosRequests;
@@ -166,7 +167,7 @@ public class DDNS {
 		return true;
 	}
 
-	/** 
+	/**
 	 * @param packet
 	 * @param send
 	 */
@@ -181,17 +182,8 @@ public class DDNS {
 */
 	}
 
-	private static Message getError(Header header, int rcode, Record question) {
-		Message response = new Message();
-		response.setHeader(header);
-		header.setRcode(rcode);
-		header.setFlag(Flags.QR);
-		response.addRecord(question, Section.QUESTION);
-		return response;
-	}
-
 	private static Record[] resolve(String host, Map<String, Record[]> staticRecords,
-			Map<String, Record[]> dynamicRecords_) {
+			Map<String, Record[]> dynamicRecords) {
 		Record[] records = staticRecords.get(host);
 		if (records != null) {
 			return records;
@@ -225,66 +217,106 @@ public class DDNS {
 			}
 			return records;
 		}
-		return dynamicRecords_.get(host);
+		return dynamicRecords.get(host);
 	}
 
 	private static Message service(Message request) {
-		Header reqHeader = request.getHeader();
-		if (reqHeader.getFlag(Flags.QR)) {
+		// Check Request Validity
+		Header header = request.getHeader();
+		if (header.getFlag(Flags.QR)) {
 			return null;
 		}
+		header.setFlag(Flags.QR);
 		Record question = request.getQuestion();
-		if (reqHeader.getRcode() != Rcode.NOERROR) {
-			return getError(reqHeader, Rcode.FORMERR, question);
+		if (header.getRcode() != Rcode.NOERROR) {
+			header.setRcode(Rcode.FORMERR);
+			return request;
 		}
-		if (reqHeader.getOpcode() != Opcode.QUERY) {
-			return getError(reqHeader, Rcode.NOTIMP, question);
+		if (header.getOpcode() != Opcode.QUERY) {
+			header.setRcode(Rcode.NOTIMP);
+			return request;
 		}
-		
+		// Get ANSWER Records
 		String host = question.getName().toString(true).toLowerCase();
-		Record[] records;
-		int type = question.getType();
-		switch (type) {
+		Record[] ansRecords;
+		switch (question.getType()) {
 		case Type.A:
 		case Type.ANY:
-			records = resolve(host, staticARecords, dynamicARecords);
+			ansRecords = resolve(host, staticARecords, dynamicARecords);
 			break;
 		case Type.NS:
-			records = nsRecords.get(host);
+			ansRecords = nsRecords.get(host);
 			break;
 		case Type.MX:
-			records = mxRecords.get(host);
+			ansRecords = mxRecords.get(host);
 			break;
 		case Type.AAAA:
-			records = resolve(host, staticAAAARecords, dynamicAAAARecords);
+			ansRecords = resolve(host, staticAAAARecords, dynamicAAAARecords);
 			break;
 		default:
-			return getError(reqHeader, Rcode.NOTIMP, question);
+			header.setRcode(Rcode.NOTIMP);
+			return request;
 		}
-		if (records == null) {
-			return getError(reqHeader, Rcode.NXDOMAIN, question);
+		// Get AUTHORITY Records
+		Record[] authRecords;
+		do {
+			authRecords = nsRecords.get(host);
+			if (authRecords != null) {
+				break;
+			}
+			int dot = host.indexOf('.');
+			if (dot < 0) {
+				break;
+			}
+			host = host.substring(dot + 1);
+		} while (!host.isEmpty());
+		if (ansRecords == null && authRecords == null) {
+			// Return NXDOMAIN if AUTHORITY not Found
+			header.setRcode(Rcode.NXDOMAIN);
+			return request;
 		}
-		Message response = new Message(reqHeader.getID());
-		Header respHeader = response.getHeader();
-		respHeader.setRcode(Rcode.NOERROR);
-		respHeader.setFlag(Flags.QR);
-		respHeader.setFlag(Flags.AA);
-		if (reqHeader.getFlag(Flags.RD)) {
-			respHeader.setFlag(Flags.RD);
+		// Prepare Response
+		boolean rd = header.getFlag(Flags.RD);
+		Message response = new Message(header.getID());
+		header = response.getHeader();
+		header.setRcode(Rcode.NOERROR);
+		header.setFlag(Flags.QR);
+		header.setFlag(Flags.AA);
+		if (rd) {
+			header.setFlag(Flags.RD);
 		}
 		response.addRecord(question, Section.QUESTION);
-		for (Record record : records) {
-			response.addRecord(record, Section.ANSWER);
-		}
-/*
-		if (type != Type.NS) {
-			for (Record[] records_ : nsRecords.values()) {
-				for (Record record : records_) {
-					response.addRecord(record, Section.AUTHORITY);
+		HashSet<Name> addNames = new HashSet<>();
+		// Set ANSWER
+		if (ansRecords != null) {
+			for (Record record : ansRecords) {
+				response.addRecord(record, Section.ANSWER);
+				if (record instanceof CNAMERecord) {
+					addNames.add(((CNAMERecord) record).getTarget());
+				} else if (record instanceof NSRecord) {
+					addNames.add(((NSRecord) record).getTarget());
+				} else if (record instanceof MXRecord) {
+					addNames.add(((MXRecord) record).getTarget());
 				}
 			}
 		}
-*/
+		// Set AUTHORITY
+		if (authRecords != null) {
+			for (Record record : authRecords) {
+				response.addRecord(record, Section.AUTHORITY);
+				addNames.add(((NSRecord) record).getTarget());
+			}
+		}
+		// Set ADDITIONAL
+		for (Name name : addNames) {
+			Record[] addRecords = staticARecords.get(name.
+					toString(true).toLowerCase());
+			if (addRecords != null) {
+				for (Record record : addRecords) {
+					response.addRecord(record, Section.ADDITIONAL);
+				}
+			}
+		}
 		return response;
 	}
 
@@ -338,7 +370,7 @@ public class DDNS {
 		if (query == null) {
 			exchange.getResponseHeaders().add("Content-Type", "application/json");
 			response(exchange, 200,
-					new JSONObject(dynamicRecords).toString().getBytes());
+					new JSONObject(dynamicProperties).toString().getBytes());
 			return;
 		}
 		String[] s = query.split("=");
@@ -346,8 +378,8 @@ public class DDNS {
 			response(exchange, 400, null);
 			return;
 		}
-		dynamicRecords.setProperty(s[0], s[1]);
-		Conf.store("DynamicRecords", dynamicRecords);
+		dynamicProperties.setProperty(s[0], s[1]);
+		Conf.store("DynamicRecords", dynamicProperties);
 		try {
 			updateRecords(dynamicARecords, dynamicAAAARecords, s[0], s[1], ttl, false);
 			response(exchange, 200, null);
@@ -407,9 +439,9 @@ public class DDNS {
 			String auth = p.getProperty("http.auth");
 			final String auth_ = auth == null ? null :
 					"Basic " + Base64.encode(auth.getBytes());
-			dynamicRecords = Conf.load("DynamicRecords");
+			dynamicProperties = Conf.load("DynamicRecords");
 			try {
-				for (Map.Entry<?, ?> entry : dynamicRecords.entrySet()) {
+				for (Map.Entry<?, ?> entry : dynamicProperties.entrySet()) {
 					updateRecords(dynamicARecords, dynamicAAAARecords, (String)
 							entry.getKey(), (String) entry.getValue(), dynamicTtl, false);
 				}
