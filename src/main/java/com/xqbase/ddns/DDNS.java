@@ -210,6 +210,9 @@ public class DDNS {
 				if (record instanceof ARecord) {
 					records[i] = new ARecord(name, dclass, ttl,
 							((ARecord) record).getAddress());
+				} else if (record instanceof CNAMERecord) {
+					records[i] = new CNAMERecord(name, dclass, ttl,
+							((CNAMERecord) record).getTarget());
 				} else if (record instanceof AAAARecord) {
 					records[i] = new AAAARecord(name, dclass, ttl,
 							((AAAARecord) record).getAddress());
@@ -241,6 +244,7 @@ public class DDNS {
 		Record[] ansRecords;
 		switch (question.getType()) {
 		case Type.A:
+		case Type.CNAME:
 		case Type.ANY:
 			ansRecords = resolve(host, staticARecords, dynamicARecords);
 			break;
