@@ -78,8 +78,8 @@ public class DDNS {
 	private static ArrayList<InetSocketAddress> dnss = new ArrayList<>();
 	private static Properties dynamicProperties;
 	private static HashMap<String, Integer> countMap = new HashMap<>();
-	private static long accessed = 0;
-	private static int dosPeriod, dosRequests;
+	private static long propAccessed = 0, dosAccessed = 0;
+	private static int propPeriod, dosPeriod, dosRequests;
 
 	private static void updateRecords(Map<String, Record[]> aRecords,
 			Map<String, Record[]> aaaaRecords, String host, String value,
@@ -144,14 +144,73 @@ public class DDNS {
 		}
 	}
 
+	private static void loadProp() {
+		staticARecords.clear();
+		staticAAAARecords.clear();
+		nsRecords.clear();
+		mxRecords.clear();
+		wildcards.clear();
+		Properties p = Conf.load("DDNS");
+		int mxPriority = Numbers.parseInt(p.getProperty("priority.mx"), 10);
+		int staticTtl = Numbers.parseInt(p.getProperty("ttl.static"), 3600);
+		for (Map.Entry<?, ?> entry : p.entrySet()) {
+			String key = (String) entry.getKey();
+			String value = (String) entry.getValue();
+			try {
+				if (key.startsWith("ns_")) {
+					String host = key.substring(3);
+					Name origin = new Name(host.endsWith(".") ? host : host + ".");
+					ArrayList<Record> records = new ArrayList<>();
+					for (String target : value.split("[,;]")) {
+						records.add(new NSRecord(origin, DClass.IN, staticTtl,
+								new Name(target.endsWith(".") ? target : target + ".")));
+					}
+					if (!records.isEmpty()) {
+						nsRecords.put(host, records.toArray(new Record[0]));
+					}
+					continue;
+				}
+				if (key.startsWith("mx_")) {
+					String host = key.substring(3);
+					Name origin = new Name(host.endsWith(".") ? host : host + ".");
+					ArrayList<Record> records = new ArrayList<>();
+					for (String target : value.split("[,;]")) {
+						records.add(new MXRecord(origin, DClass.IN, staticTtl, mxPriority,
+								new Name(target.endsWith(".") ? target : target + ".")));
+					}
+					if (!records.isEmpty()) {
+						mxRecords.put(host, records.toArray(new Record[0]));
+					}
+					continue;
+				}
+				if (!key.startsWith("a_")) {
+					continue;
+				}
+				String host = key.substring(2);
+				if (host.isEmpty()) {
+					continue;
+				}
+				boolean wildcard = false;
+				if (host.charAt(0) == '*') {
+					wildcard = true;
+					host = host.substring(1);
+					wildcards.add(host);
+				}
+				updateRecords(staticARecords, staticAAAARecords, host, value, staticTtl, wildcard);
+			} catch (IOException e) {
+				Log.e(e);
+			}
+		}
+	}
+
 	private static boolean blocked(String ip) {
 		if (dosPeriod == 0 || dosRequests == 0) {
 			return false;
 		}
 		long now = System.currentTimeMillis();
-		if (now > accessed + dosPeriod) {
+		if (now > dosAccessed + dosPeriod) {
 			countMap.clear();
-			accessed = now;
+			dosAccessed = now;
 		}
 		Integer count_ = countMap.get(ip);
 		int count = (count_ == null ? 0 : count_.intValue());
@@ -403,9 +462,8 @@ public class DDNS {
 
 		Properties p = Conf.load("DDNS");
 		int port = Numbers.parseInt(p.getProperty("port"), 53);
-		int mxPriority = Numbers.parseInt(p.getProperty("priority.mx"), 10);
-		int staticTtl = Numbers.parseInt(p.getProperty("ttl.static"), 3600);
 		final int dynamicTtl = Numbers.parseInt(p.getProperty("ttl.dynamic"), 10);
+		propPeriod = Numbers.parseInt(p.getProperty("prop.period")) * 1000;
 		// DoS
 		dosPeriod = Numbers.parseInt(p.getProperty("dos.period")) * 1000;
 		dosRequests = Numbers.parseInt(p.getProperty("dos.requests"));
@@ -436,6 +494,17 @@ public class DDNS {
 				dnss.add(new InetSocketAddress(s, 53));
 			}
 		}
+		// Load Static and Dynamic Records
+		loadProp();
+		dynamicProperties = Conf.load("DynamicRecords");
+		try {
+			for (Map.Entry<?, ?> entry : dynamicProperties.entrySet()) {
+				updateRecords(dynamicARecords, dynamicAAAARecords, (String)
+						entry.getKey(), (String) entry.getValue(), dynamicTtl, false);
+			}
+		} catch (IOException e) {
+			Log.e(e);
+		}
 		// HTTP Updating Service
 		int httpPort = Numbers.parseInt(p.getProperty("http.port"), 5380);
 		HttpServer httpServer = null;
@@ -443,12 +512,7 @@ public class DDNS {
 			String auth = p.getProperty("http.auth");
 			final String auth_ = auth == null ? null :
 					"Basic " + Base64.encode(auth.getBytes());
-			dynamicProperties = Conf.load("DynamicRecords");
 			try {
-				for (Map.Entry<?, ?> entry : dynamicProperties.entrySet()) {
-					updateRecords(dynamicARecords, dynamicAAAARecords, (String)
-							entry.getKey(), (String) entry.getValue(), dynamicTtl, false);
-				}
 				httpServer = HttpServer.create(new InetSocketAddress(httpPort), 50);
 				httpServer.createContext("/", new HttpHandler() {
 					@Override
@@ -477,54 +541,6 @@ public class DDNS {
 		MetricClient.startup(addrs.toArray(new InetSocketAddress[0]));
 		Executors.schedule(new ManagementMonitor("ddns.server"), 0, 5000);
 
-		for (Map.Entry<?, ?> entry : p.entrySet()) {
-			String key = (String) entry.getKey();
-			String value = (String) entry.getValue();
-			try {
-				if (key.startsWith("ns_")) {
-					String host = key.substring(3);
-					Name origin = new Name(host.endsWith(".") ? host : host + ".");
-					ArrayList<Record> records = new ArrayList<>();
-					for (String target : value.split("[,;]")) {
-						records.add(new NSRecord(origin, DClass.IN, staticTtl,
-								new Name(target.endsWith(".") ? target : target + ".")));
-					}
-					if (!records.isEmpty()) {
-						nsRecords.put(host, records.toArray(new Record[0]));
-					}
-					continue;
-				}
-				if (key.startsWith("mx_")) {
-					String host = key.substring(3);
-					Name origin = new Name(host.endsWith(".") ? host : host + ".");
-					ArrayList<Record> records = new ArrayList<>();
-					for (String target : value.split("[,;]")) {
-						records.add(new MXRecord(origin, DClass.IN, staticTtl, mxPriority,
-								new Name(target.endsWith(".") ? target : target + ".")));
-					}
-					if (!records.isEmpty()) {
-						mxRecords.put(host, records.toArray(new Record[0]));
-					}
-					continue;
-				}
-				if (!key.startsWith("a_")) {
-					continue;
-				}
-				String host = key.substring(2);
-				if (host.isEmpty()) {
-					continue;
-				}
-				boolean wildcard = false;
-				if (host.charAt(0) == '*') {
-					wildcard = true;
-					host = host.substring(1);
-					wildcards.add(host);
-				}
-				updateRecords(staticARecords, staticAAAARecords, host, value, staticTtl, wildcard);
-			} catch (IOException e) {
-				Log.e(e);
-			}
-		}
 		Log.i("DDNS Started");
 
 		// For Debug on localhost (192.168.0.1:53 is bound by Microsoft Loopback Adapter)
@@ -552,6 +568,14 @@ public class DDNS {
 				}
 			});
 			while (!Thread.interrupted()) {
+				// Load Properties
+				if (propPeriod > 0) {
+					long now = System.currentTimeMillis();
+					if (now > propAccessed + propPeriod) {
+						loadProp();
+						propAccessed = now;
+					}
+				}
 				// Receive
 				byte[] buf = new byte[65536];
 				DatagramPacket packet = new DatagramPacket(buf, buf.length);
