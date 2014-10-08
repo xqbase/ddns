@@ -3,7 +3,6 @@ package com.xqbase.ddns;
 import java.io.IOException;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
-import java.net.Inet6Address;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
@@ -22,7 +21,6 @@ import java.util.logging.Logger;
 
 import org.json.JSONException;
 import org.json.JSONObject;
-import org.xbill.DNS.AAAARecord;
 import org.xbill.DNS.ARecord;
 import org.xbill.DNS.CNAMERecord;
 import org.xbill.DNS.DClass;
@@ -66,14 +64,11 @@ class DataEntry {
 }
 
 public class DDNS {
+	private static final Record[] EMPTY_RECORDS = new Record[0];
 	private static ConcurrentHashMap<String, Record[]>
-			dynamicARecords = new ConcurrentHashMap<>(),
-			dynamicAAAARecords = new ConcurrentHashMap<>();
-	private static HashMap<String, Record[]>
-			staticARecords = new HashMap<>(),
-			staticAAAARecords = new HashMap<>(),
-			nsRecords = new HashMap<>(),
-			mxRecords = new HashMap<>();
+			dynamicRecords = new ConcurrentHashMap<>();
+	private static HashMap<String, Record[]> aRecords = new HashMap<>(),
+			nsRecords = new HashMap<>(), mxRecords = new HashMap<>();
 	private static ArrayList<String> wildcards = new ArrayList<>();
 	private static ArrayList<InetSocketAddress> dnss = new ArrayList<>();
 	private static Properties dynamicProperties;
@@ -81,17 +76,16 @@ public class DDNS {
 	private static long propAccessed = 0, dosAccessed = 0;
 	private static int propPeriod, dosPeriod, dosRequests;
 
-	private static void updateRecords(Map<String, Record[]> aRecords,
-			Map<String, Record[]> aaaaRecords, String host, String value,
-			int ttl, boolean wildcard) throws IOException {
+	private static void updateRecords(Map<String, Record[]> records,
+			String host, String value, int ttl, boolean wildcard) throws IOException {
 		Name origin = wildcard ? new Name("localhost.") :
 				new Name((host.endsWith(".") ? host : host + ".").replace('_', '-'));
-		ArrayList<Record> records = new ArrayList<>(), records6 = new ArrayList<>();
+		ArrayList<Record> recordList = new ArrayList<>(), records6 = new ArrayList<>();
 		for (String s : value.split("[,;]")) {
 			if (s.matches(".*[A-Z|a-z].*")) {
 				CNAMERecord record = new CNAMERecord(origin, DClass.IN, ttl,
 						new Name(s.endsWith(".") ? s : s + "."));
-				records.add(record);
+				recordList.add(record);
 				records6.add(record);
 				continue;
 			}
@@ -103,17 +97,11 @@ public class DDNS {
 			for (int i = 0; i < 4; i ++) {
 				ip[i] = (byte) Numbers.parseInt(ss[i]);
 			}
-			records.add(new ARecord(origin, DClass.IN,
+			recordList.add(new ARecord(origin, DClass.IN,
 					ttl, InetAddress.getByAddress(ip)));
-			byte[] ip6 = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, -1, -1, ip[0], ip[1], ip[2], ip[3]};
-			records6.add(new AAAARecord(origin, DClass.IN,
-					ttl, Inet6Address.getByAddress(null, ip6, null)));
 		}
-		if (!records.isEmpty()) {
-			aRecords.put(host, records.toArray(new Record[0]));
-		}
-		if (!records6.isEmpty()) {
-			aaaaRecords.put(host, records6.toArray(new Record[0]));
+		if (!recordList.isEmpty()) {
+			records.put(host, recordList.toArray(EMPTY_RECORDS));
 		}
 	}
 
@@ -135,8 +123,7 @@ public class DDNS {
 				String host = (String) it.next();
 				String addr = map.optString(host);
 				if (addr != null) {
-					updateRecords(dynamicARecords, dynamicAAAARecords,
-							host, addr, ttl, false);
+					updateRecords(dynamicRecords, host, addr, ttl, false);
 				}
 			}
 		} catch (IOException | JSONException e) {
@@ -145,8 +132,7 @@ public class DDNS {
 	}
 
 	private static void loadProp() {
-		staticARecords.clear();
-		staticAAAARecords.clear();
+		aRecords.clear();
 		nsRecords.clear();
 		mxRecords.clear();
 		wildcards.clear();
@@ -166,7 +152,7 @@ public class DDNS {
 								new Name(target.endsWith(".") ? target : target + ".")));
 					}
 					if (!records.isEmpty()) {
-						nsRecords.put(host, records.toArray(new Record[0]));
+						nsRecords.put(host, records.toArray(EMPTY_RECORDS));
 					}
 					continue;
 				}
@@ -179,7 +165,7 @@ public class DDNS {
 								new Name(target.endsWith(".") ? target : target + ".")));
 					}
 					if (!records.isEmpty()) {
-						mxRecords.put(host, records.toArray(new Record[0]));
+						mxRecords.put(host, records.toArray(EMPTY_RECORDS));
 					}
 					continue;
 				}
@@ -196,7 +182,7 @@ public class DDNS {
 					host = host.substring(1);
 					wildcards.add(host);
 				}
-				updateRecords(staticARecords, staticAAAARecords, host, value, staticTtl, wildcard);
+				updateRecords(aRecords, host, value, staticTtl, wildcard);
 			} catch (IOException e) {
 				Log.e(e);
 			}
@@ -241,48 +227,31 @@ public class DDNS {
 */
 	}
 
-	private static Record[] resolve(String host, Map<String, Record[]> staticRecords,
-			Map<String, Record[]> dynamicRecords) {
-		Record[] records = staticRecords.get(host);
-		if (records != null) {
-			return records;
-		}
-		for (String wildcard : wildcards) {
-			if (!host.endsWith(wildcard)) {
+	private static Record[] setNames(Record[] records, String host) {
+		Record[] cloned = new Record[records.length];
+		for (int i = 0; i < records.length; i ++) {
+			Record record = records[i];
+			Name name;
+			try {
+				name = new Name(host.endsWith(".") ? host : host + ".");
+			} catch (IOException e) {
+				Log.w(e.getMessage());
 				continue;
 			}
-			records = staticRecords.get(wildcard);
-			if (records == null) {
-				continue;
+			int dclass = record.getDClass();
+			long ttl = record.getTTL();
+			if (record instanceof ARecord) {
+				cloned[i] = new ARecord(name, dclass, ttl,
+						((ARecord) record).getAddress());
+			} else if (record instanceof CNAMERecord) {
+				cloned[i] = new CNAMERecord(name, dclass, ttl,
+						((CNAMERecord) record).getTarget());
 			}
-			for (int i = 0; i < records.length; i ++) {
-				Record record = records[i];
-				Name name;
-				try {
-					name = new Name(host.endsWith(".") ? host : host + ".");
-				} catch (IOException e) {
-					Log.w(e.getMessage());
-					continue;
-				}
-				int dclass = record.getDClass();
-				long ttl = record.getTTL();
-				if (record instanceof ARecord) {
-					records[i] = new ARecord(name, dclass, ttl,
-							((ARecord) record).getAddress());
-				} else if (record instanceof CNAMERecord) {
-					records[i] = new CNAMERecord(name, dclass, ttl,
-							((CNAMERecord) record).getTarget());
-				} else if (record instanceof AAAARecord) {
-					records[i] = new AAAARecord(name, dclass, ttl,
-							((AAAARecord) record).getAddress());
-				}
-			}
-			return records;
 		}
-		return dynamicRecords.get(host);
+		return cloned;
 	}
 
-	private static Message service(Message request) {
+	private static Message service(Message request, String[] domain) {
 		// Check Request Validity
 		Header header = request.getHeader();
 		if (header.getFlag(Flags.QR)) {
@@ -300,31 +269,47 @@ public class DDNS {
 		}
 		// Get ANSWER Records
 		String host = question.getName().toString(true).toLowerCase();
-		Record[] ansRecords;
+		Record[] answers;
 		switch (question.getType()) {
 		case Type.A:
+		case Type.AAAA:
 		case Type.CNAME:
 		case Type.ANY:
-			ansRecords = resolve(host, staticARecords, dynamicARecords);
+			answers = aRecords.get(host);
+			if (answers == null) {
+				for (String wildcard : wildcards) {
+					if (!host.endsWith(wildcard)) {
+						continue;
+					}
+					answers = aRecords.get(wildcard);
+					if (answers == null) {
+						continue;
+					}
+					// Do not pollute "aRecords"
+					answers = setNames(answers, host);
+					break;
+				}
+				if (answers == null) {
+					answers = dynamicRecords.get(host);
+				}
+			}
 			break;
 		case Type.NS:
-			ansRecords = nsRecords.get(host);
+			answers = nsRecords.get(host);
 			break;
 		case Type.MX:
-			ansRecords = mxRecords.get(host);
-			break;
-		case Type.AAAA:
-			ansRecords = resolve(host, staticAAAARecords, dynamicAAAARecords);
+			answers = mxRecords.get(host);
 			break;
 		default:
 			header.setRcode(Rcode.NOTIMP);
 			return request;
 		}
 		// Get AUTHORITY Records
-		Record[] authRecords;
+		Record[] authorities;
 		do {
-			authRecords = nsRecords.get(host);
-			if (authRecords != null) {
+			authorities = nsRecords.get(host);
+			if (authorities != null) {
+				domain[0] = host;
 				break;
 			}
 			int dot = host.indexOf('.');
@@ -333,7 +318,7 @@ public class DDNS {
 			}
 			host = host.substring(dot + 1);
 		} while (!host.isEmpty());
-		if (ansRecords == null && authRecords == null) {
+		if (answers == null && authorities == null) {
 			// Return NXDOMAIN if AUTHORITY not Found
 			header.setRcode(Rcode.NXDOMAIN);
 			return request;
@@ -351,8 +336,8 @@ public class DDNS {
 		response.addRecord(question, Section.QUESTION);
 		HashSet<Name> addNames = new HashSet<>();
 		// Set ANSWER
-		if (ansRecords != null) {
-			for (Record record : ansRecords) {
+		if (answers != null) {
+			for (Record record : answers) {
 				response.addRecord(record, Section.ANSWER);
 				if (record instanceof CNAMERecord) {
 					addNames.add(((CNAMERecord) record).getTarget());
@@ -364,18 +349,18 @@ public class DDNS {
 			}
 		}
 		// Set AUTHORITY
-		if (authRecords != null) {
-			for (Record record : authRecords) {
+		if (authorities != null) {
+			for (Record record : authorities) {
 				response.addRecord(record, Section.AUTHORITY);
 				addNames.add(((NSRecord) record).getTarget());
 			}
 		}
 		// Set ADDITIONAL
 		for (Name name : addNames) {
-			Record[] addRecords = staticARecords.get(name.
+			Record[] additionals = aRecords.get(name.
 					toString(true).toLowerCase());
-			if (addRecords != null) {
-				for (Record record : addRecords) {
+			if (additionals != null) {
+				for (Record record : additionals) {
 					response.addRecord(record, Section.ADDITIONAL);
 				}
 			}
@@ -444,7 +429,7 @@ public class DDNS {
 		dynamicProperties.setProperty(s[0], s[1]);
 		Conf.store("DynamicRecords", dynamicProperties);
 		try {
-			updateRecords(dynamicARecords, dynamicAAAARecords, s[0], s[1], ttl, false);
+			updateRecords(dynamicRecords, s[0], s[1], ttl, false);
 			response(exchange, 200, null);
 		} catch (IOException e) {
 			Log.w(e.getMessage());
@@ -499,8 +484,8 @@ public class DDNS {
 		dynamicProperties = Conf.load("DynamicRecords");
 		try {
 			for (Map.Entry<?, ?> entry : dynamicProperties.entrySet()) {
-				updateRecords(dynamicARecords, dynamicAAAARecords, (String)
-						entry.getKey(), (String) entry.getValue(), dynamicTtl, false);
+				updateRecords(dynamicRecords, (String) entry.getKey(),
+						(String) entry.getValue(), dynamicTtl, false);
 			}
 		} catch (IOException e) {
 			Log.e(e);
@@ -596,27 +581,14 @@ public class DDNS {
 					continue;
 				}
 				// Call Service in Trunk Thread
-				Message response = service(request);
+				String[] domain = {"null"};
+				Message response = service(request, domain);
 				if (response == null) {
 					continue;
 				}
 				int rcode = response.getRcode();
 				Record question = request.getQuestion();
-				String name = "null";
-				if (rcode == Rcode.NOERROR && question != null) {
-					Name name_ = question.getName();
-					if (name_ != null) {
-						int labels = name_.labels();
-						if (labels >= 3 && name_.getLabelString(labels - 1).isEmpty()) {
-							name = name_.getLabelString(labels - 3).toLowerCase() +
-									"." + name_.getLabelString(labels - 2).toLowerCase();
-						} else if (labels >= 2) {
-							name = name_.getLabelString(labels - 2).toLowerCase() +
-									"." + name_.getLabelString(labels - 1).toLowerCase();
-						}
-					}
-				}
-				Metric.put("ddns.resolve", 1, "rcode", Rcode.string(rcode), "name", name,
+				Metric.put("ddns.resolve", 1, "rcode", Rcode.string(rcode), "name", domain[0],
 						"type", question == null ? "null" : Type.string(question.getType()));
 				final byte[] respData = response.toWire();
 				if (dnss.isEmpty() || rcode < Rcode.NXDOMAIN) {
