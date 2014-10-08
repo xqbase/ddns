@@ -238,8 +238,8 @@ public class DDNS {
 			}
 			records = wildcards.get(host_);
 		}
-		if (records != null && domain != null && domain.length > 0) {
-			domain[0] = host_;
+		if (records != null && domain != null && domain.length > 0 && domain[0] == null) {
+			domain[0] = "*." + host_;
 		}
 		return records;
 	}
@@ -307,10 +307,11 @@ public class DDNS {
 			answers = cloned;
 			break;
 		case Type.NS:
-			answers = nsRecords.get(host);
-			break;
 		case Type.MX:
-			answers = mxRecords.get(host);
+			answers = (type == Type.NS ? nsRecords : mxRecords).get(host);
+			if (answers != null) {
+				domain[0] = host;
+			}
 			break;
 		default:
 			header.setRcode(Rcode.NOTIMP);
@@ -343,7 +344,7 @@ public class DDNS {
 			answers = cloned;
 		}
 		// Get AUTHORITY Records
-		Record[] authorities = resolveWildcard(nsRecords, host, null);
+		Record[] authorities = resolveWildcard(nsRecords, host, domain);
 		if (answers == null && authorities == null) {
 			// Return NXDOMAIN if AUTHORITY not Found
 			header.setRcode(Rcode.NXDOMAIN);
@@ -551,7 +552,6 @@ public class DDNS {
 		}
 		MetricClient.startup(addrs.toArray(new InetSocketAddress[0]));
 		Executors.schedule(new ManagementMonitor("ddns.server"), 0, 5000);
-
 		Log.i("DDNS Started");
 
 		// For Debug on localhost (192.168.0.1:53 is bound by Microsoft Loopback Adapter)
@@ -607,15 +607,16 @@ public class DDNS {
 					continue;
 				}
 				// Call Service in Trunk Thread
-				String[] domain = {"null"};
+				String[] domain = {null};
 				Message response = service(request, domain);
 				if (response == null) {
 					continue;
 				}
 				int rcode = response.getRcode();
 				Record question = request.getQuestion();
-				Metric.put("ddns.resolve", 1, "rcode", Rcode.string(rcode), "name", domain[0],
-						"type", question == null ? "null" : Type.string(question.getType()));
+				Metric.put("ddns.resolve", 1, "rcode", Rcode.string(rcode),
+						"name", "" + domain[0], "type", question == null ?
+						"null" : Type.string(question.getType()));
 				final byte[] respData = response.toWire();
 				if (dnss.isEmpty() || rcode < Rcode.NXDOMAIN) {
 					// Send
