@@ -5,7 +5,7 @@
 PID_FILE=/var/run/ddns.pid
 case "$1" in
         start)
-                java -jar /usr/local/ddns/lib/ddns.jar &
+                java -jar /usr/local/xqbase-ddns/lib/ddns.jar &
                 echo $! > $PID_FILE
                 ;;
         stop)
