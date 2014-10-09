@@ -238,7 +238,7 @@ public class DDNS {
 			}
 			records = wildcards.get(host_);
 		}
-		if (records != null && domain != null && domain.length > 0 && domain[0] == null) {
+		if (records != null && domain[0] == null) {
 			domain[0] = "*." + host_;
 		}
 		return records;
