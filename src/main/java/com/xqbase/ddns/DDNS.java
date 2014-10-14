@@ -52,7 +52,7 @@ import com.xqbase.metric.client.MetricClient;
 import com.xqbase.metric.common.Metric;
 import com.xqbase.util.ByteArrayQueue;
 import com.xqbase.util.Bytes;
-import com.xqbase.util.Command;
+import com.xqbase.util.Runnables;
 import com.xqbase.util.Conf;
 import com.xqbase.util.Log;
 import com.xqbase.util.Numbers;
@@ -489,7 +489,7 @@ public class DDNS {
 		String addrApiUrl = p.getProperty("api.addr");
 		if (addrApiUrl != null) {
 			final HttpPool addrApi = new HttpPool(addrApiUrl, dynamicTtl * 2000);
-			executor.execute(new Command(new Runnable() {
+			executor.execute(Runnables.wrap(new Runnable() {
 				@Override
 				public void run() {
 					long lastAccessed = 0;
@@ -557,7 +557,7 @@ public class DDNS {
 			}
 		}
 		MetricClient.startup(addrs.toArray(new InetSocketAddress[0]));
-		timer.scheduleAtFixedRate(new Command(new ManagementMonitor("ddns.server")),
+		timer.scheduleAtFixedRate(Runnables.wrap(new ManagementMonitor("ddns.server")),
 				0, 5000, TimeUnit.MILLISECONDS);
 		Log.i("DDNS Started");
 
@@ -565,7 +565,7 @@ public class DDNS {
 		// try (DatagramSocket socket = new DatagramSocket(new InetSocketAddress("127.0.0.1", port))) {
 		try (DatagramSocket socket = new DatagramSocket(port)) {
 			hook.register(socket);
-			hook.execute(new Runnable() {
+			hook.execute(Runnables.wrap(new Runnable() {
 				@Override
 				public void run() {
 					try {
@@ -584,7 +584,7 @@ public class DDNS {
 						// Exit Polling
 					}
 				}
-			});
+			}));
 			while (!Thread.interrupted()) {
 				// Load Properties
 				if (propPeriod > 0) {
@@ -630,7 +630,7 @@ public class DDNS {
 					dataQueue.offer(new DataEntry(remote, respData));
 				} else {
 					// Call DNS Service in Branch Thread
-					executor.execute(new Command(new Runnable() {
+					executor.execute(Runnables.wrap(new Runnable() {
 						@Override
 						public void run() {
 							serviceDns(remote, reqData, respData);
@@ -650,8 +650,8 @@ public class DDNS {
 			httpServer.stop(0);
 		}
 		MetricClient.shutdown();
-		Command.shutdown(executor);
-		Command.shutdown(timer);
+		Runnables.shutdown(executor);
+		Runnables.shutdown(timer);
 		Log.i("DDNS Stopped");
 		Conf.closeLogger(Log.getAndSet(logger));
 	}
