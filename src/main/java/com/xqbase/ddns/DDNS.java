@@ -44,7 +44,6 @@ import org.xbill.DNS.Section;
 import org.xbill.DNS.Type;
 
 import com.sun.net.httpserver.HttpExchange;
-import com.sun.net.httpserver.HttpHandler;
 import com.sun.net.httpserver.HttpServer;
 import com.sun.org.apache.xerces.internal.impl.dv.util.Base64;
 import com.xqbase.metric.client.ManagementMonitor;
@@ -52,10 +51,10 @@ import com.xqbase.metric.client.MetricClient;
 import com.xqbase.metric.common.Metric;
 import com.xqbase.util.ByteArrayQueue;
 import com.xqbase.util.Bytes;
-import com.xqbase.util.Runnables;
 import com.xqbase.util.Conf;
 import com.xqbase.util.Log;
 import com.xqbase.util.Numbers;
+import com.xqbase.util.Runnables;
 import com.xqbase.util.ShutdownHook;
 import com.xqbase.util.Time;
 import com.xqbase.util.http.HttpPool;
@@ -110,7 +109,7 @@ public class DDNS {
 		}
 	}
 
-	static void updateDynamics(HttpPool addrApi, int ttl) {
+	private static void updateDynamics(HttpPool addrApi, int ttl) {
 		ByteArrayQueue body = new ByteArrayQueue();
 		try {
 			if (addrApi.get("", null, body, null) >= 400) {
@@ -216,7 +215,7 @@ public class DDNS {
 	 * @param packet
 	 * @param send
 	 */
-	static void dump(DatagramPacket packet, boolean send) {
+	private static void dump(DatagramPacket packet, boolean send) {
 /*
 		StringWriter sw = new StringWriter();
 		PrintWriter out = new PrintWriter(sw);
@@ -399,9 +398,9 @@ public class DDNS {
 		return response;
 	}
 
-	static LinkedBlockingQueue<DataEntry> dataQueue = new LinkedBlockingQueue<>();
+	private static LinkedBlockingQueue<DataEntry> dataQueue = new LinkedBlockingQueue<>();
 
-	static void serviceDns(SocketAddress addr, byte[] reqData, byte[] respData) {
+	private static void serviceDns(SocketAddress addr, byte[] reqData, byte[] respData) {
 		for (InetSocketAddress dns : dnss) {
 			try (DatagramSocket socket = new DatagramSocket()) {
 				socket.setSoTimeout(1000);
@@ -434,7 +433,7 @@ public class DDNS {
 		exchange.close();
 	}
 
-	static void serviceHttp(HttpExchange exchange, String auth, int ttl) {
+	private static void serviceHttp(HttpExchange exchange, String auth, int ttl) {
 		if (auth != null) {
 			List<String> auths = exchange.getRequestHeaders().get("Authorization");
 			if (auths == null || auths.isEmpty() || !auth.equals(auths.get(0))) {
@@ -468,7 +467,7 @@ public class DDNS {
 		}
 	}
 
-	static ShutdownHook hook = new ShutdownHook();
+	private static ShutdownHook hook = new ShutdownHook();
 
 	public static void main(String[] args) {
 		if (hook.isShutdown(args)) {
@@ -480,7 +479,7 @@ public class DDNS {
 
 		Properties p = Conf.load("DDNS");
 		int port = Numbers.parseInt(p.getProperty("port"), 53);
-		final int dynamicTtl = Numbers.parseInt(p.getProperty("ttl.dynamic"), 10);
+		int dynamicTtl = Numbers.parseInt(p.getProperty("ttl.dynamic"), 10);
 		propPeriod = Numbers.parseInt(p.getProperty("prop.period")) * 1000;
 		// DoS
 		dosPeriod = Numbers.parseInt(p.getProperty("dos.period")) * 1000;
@@ -488,21 +487,18 @@ public class DDNS {
 		// API Client
 		String addrApiUrl = p.getProperty("api.addr");
 		if (addrApiUrl != null) {
-			final HttpPool addrApi = new HttpPool(addrApiUrl, dynamicTtl * 2000);
-			executor.execute(Runnables.wrap(new Runnable() {
-				@Override
-				public void run() {
-					long lastAccessed = 0;
-					while (!hook.isInterrupted()) {
-						long now = System.currentTimeMillis();
-						if (now - lastAccessed > dynamicTtl * 1000) {
-							lastAccessed = now;
-							updateDynamics(addrApi, dynamicTtl);
-						}
-						Time.sleep(16);
+			HttpPool addrApi = new HttpPool(addrApiUrl, dynamicTtl * 2000);
+			executor.execute(Runnables.wrap(() -> {
+				long lastAccessed = 0;
+				while (!hook.isInterrupted()) {
+					long now = System.currentTimeMillis();
+					if (now - lastAccessed > dynamicTtl * 1000) {
+						lastAccessed = now;
+						updateDynamics(addrApi, dynamicTtl);
 					}
-					addrApi.close();
+					Time.sleep(16);
 				}
+				addrApi.close();
 			}));
 		}
 		// External DNS
@@ -528,16 +524,11 @@ public class DDNS {
 		HttpServer httpServer = null;
 		if (httpPort > 0) {
 			String auth = p.getProperty("http.auth");
-			final String auth_ = auth == null ? null :
+			String auth_ = auth == null ? null :
 					"Basic " + Base64.encode(auth.getBytes());
 			try {
 				httpServer = HttpServer.create(new InetSocketAddress(httpPort), 50);
-				httpServer.createContext("/", new HttpHandler() {
-					@Override
-					public void handle(HttpExchange exchange) {
-						serviceHttp(exchange, auth_, dynamicTtl);
-					}
-				});
+				httpServer.createContext("/", exchange -> serviceHttp(exchange, auth_, dynamicTtl));
 				httpServer.start();
 			} catch (IOException e) {
 				Log.e(e);
@@ -565,24 +556,21 @@ public class DDNS {
 		// try (DatagramSocket socket = new DatagramSocket(new InetSocketAddress("127.0.0.1", port))) {
 		try (DatagramSocket socket = new DatagramSocket(port)) {
 			hook.register(socket);
-			hook.execute(Runnables.wrap(new Runnable() {
-				@Override
-				public void run() {
-					try {
-						while (true) {
-							DataEntry dataEntry = dataQueue.take();
-							try {
-								DatagramPacket packet = new DatagramPacket(dataEntry.data,
-										dataEntry.data.length, dataEntry.addr);
-								socket.send(packet);
-								dump(packet, true);
-							} catch (IOException e) {
-								Log.w(e);
-							}
+			hook.execute(Runnables.wrap(() -> {
+				try {
+					while (true) {
+						DataEntry dataEntry = dataQueue.take();
+						try {
+							DatagramPacket packet = new DatagramPacket(dataEntry.data,
+									dataEntry.data.length, dataEntry.addr);
+							socket.send(packet);
+							dump(packet, true);
+						} catch (IOException e) {
+							Log.w(e);
 						}
-					} catch (InterruptedException e) {
-						// Exit Polling
 					}
+				} catch (InterruptedException e) {
+					// Exit Polling
 				}
 			}));
 			while (!Thread.interrupted()) {
@@ -600,12 +588,12 @@ public class DDNS {
 				// Blocked, or closed by shutdown handler
 				socket.receive(packet);
 				// DoS Filtering
-				final SocketAddress remote = packet.getSocketAddress();
+				SocketAddress remote = packet.getSocketAddress();
 				if (blocked(((InetSocketAddress) remote).getAddress().getHostAddress())) {
 					continue;
 				}
 				dump(packet, false);
-				final byte[] reqData = Bytes.left(buf, packet.getLength());
+				byte[] reqData = Bytes.left(buf, packet.getLength());
 				Message request;
 				try {
 					request = new Message(reqData);
@@ -624,18 +612,13 @@ public class DDNS {
 				Metric.put("ddns.resolve", 1, "rcode", Rcode.string(rcode),
 						"name", "" + domain[0], "type", question == null ?
 						"null" : Type.string(question.getType()));
-				final byte[] respData = response.toWire();
+				byte[] respData = response.toWire();
 				if (dnss.isEmpty() || rcode < Rcode.NXDOMAIN) {
 					// Send
 					dataQueue.offer(new DataEntry(remote, respData));
 				} else {
 					// Call DNS Service in Branch Thread
-					executor.execute(Runnables.wrap(new Runnable() {
-						@Override
-						public void run() {
-							serviceDns(remote, reqData, respData);
-						}
-					}));
+					executor.execute(Runnables.wrap(() -> serviceDns(remote, reqData, respData)));
 				}
 			}
 		} catch (IOException e) {
