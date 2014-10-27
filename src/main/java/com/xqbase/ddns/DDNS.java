@@ -1,6 +1,8 @@
 package com.xqbase.ddns;
 
 import java.io.IOException;
+import java.io.PrintWriter;
+import java.io.StringWriter;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.Inet4Address;
@@ -81,6 +83,7 @@ public class DDNS {
 	private static HashMap<String, Integer> countMap = new HashMap<>();
 	private static long propAccessed = 0, dosAccessed = 0;
 	private static int propPeriod, dosPeriod, dosRequests;
+	private static boolean verbose = false;
 
 	private static void updateRecords(Map<String, Record[]> records,
 			String host, String value, int ttl) throws IOException {
@@ -141,6 +144,7 @@ public class DDNS {
 		nsRecords.clear();
 		mxRecords.clear();
 		Properties p = Conf.load("DDNS");
+		verbose = Conf.getBoolean(p.getProperty("verbose"), false);
 		int mxPriority = Numbers.parseInt(p.getProperty("priority.mx"), 10);
 		int staticTtl = Numbers.parseInt(p.getProperty("ttl.static"), 3600);
 		for (Map.Entry<?, ?> entry : p.entrySet()) {
@@ -211,19 +215,22 @@ public class DDNS {
 		return true;
 	}
 
-	/**
-	 * @param packet
-	 * @param send
-	 */
 	private static void dump(DatagramPacket packet, boolean send) {
-/*
+		if (!verbose) {
+			return;
+		}
 		StringWriter sw = new StringWriter();
 		PrintWriter out = new PrintWriter(sw);
 		out.println((send ? "Sent to " : "Received from ") +
 				packet.getAddress().getHostAddress());
-		Bytes.dump(out, packet.getData(), packet.getOffset(), packet.getLength());
+		byte[] data = Bytes.sub(packet.getData(), packet.getOffset(), packet.getLength());
+		Bytes.dump(out, data);
+		try {
+			out.println(new Message(data));
+		} catch (IOException e) {
+			out.println(e.getMessage());
+		}
 		Log.d(sw.toString());
-*/
 	}
 
 	private static Record[] resolveWildcard(Map<String, Record[]>
