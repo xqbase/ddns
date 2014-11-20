@@ -444,8 +444,7 @@ public class DDNS {
 		if (auth != null) {
 			List<String> auths = exchange.getRequestHeaders().get("Authorization");
 			if (auths == null || auths.isEmpty() || !auth.equals(auths.get(0))) {
-				exchange.getResponseHeaders().add("WWW-Authenticate",
-						"Basic realm=\"Dynamic DNS\"");
+				exchange.getResponseHeaders().add("WWW-Authenticate", "Basic");
 				response(exchange, 401, null);
 				return;
 			}
