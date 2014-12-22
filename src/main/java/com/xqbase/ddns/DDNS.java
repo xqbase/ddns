@@ -57,7 +57,7 @@ import com.xqbase.util.Conf;
 import com.xqbase.util.Log;
 import com.xqbase.util.Numbers;
 import com.xqbase.util.Runnables;
-import com.xqbase.util.ShutdownHook;
+import com.xqbase.util.Service;
 import com.xqbase.util.Time;
 import com.xqbase.util.http.HttpPool;
 
@@ -79,6 +79,8 @@ public class DDNS {
 			aRecords = new HashMap<>(), aWildcards = new HashMap<>(),
 			nsRecords = new HashMap<>(), mxRecords = new HashMap<>();
 	private static ArrayList<InetSocketAddress> dnss = new ArrayList<>();
+	private static LinkedBlockingQueue<DataEntry> dataQueue = new LinkedBlockingQueue<>();
+	private static Service service = new Service();
 	private static Properties dynamicRecords;
 	private static HashMap<String, Integer> countMap = new HashMap<>();
 	private static long propAccessed = 0, dosAccessed = 0;
@@ -405,8 +407,6 @@ public class DDNS {
 		return response;
 	}
 
-	private static LinkedBlockingQueue<DataEntry> dataQueue = new LinkedBlockingQueue<>();
-
 	private static void serviceDns(SocketAddress addr, byte[] reqData, byte[] respData) {
 		for (InetSocketAddress dns : dnss) {
 			try (DatagramSocket socket = new DatagramSocket()) {
@@ -473,10 +473,8 @@ public class DDNS {
 		}
 	}
 
-	private static ShutdownHook hook = new ShutdownHook();
-
 	public static void main(String[] args) {
-		if (hook.isShutdown(args)) {
+		if (!service.startup(args)) {
 			return;
 		}
 		Logger logger = Log.getAndSet(Conf.openLogger("DDNS.", 16777216, 10));
@@ -496,7 +494,7 @@ public class DDNS {
 			HttpPool addrApi = new HttpPool(addrApiUrl, dynamicTtl * 2000);
 			executor.execute(Runnables.wrap(() -> {
 				long lastAccessed = 0;
-				while (!hook.isInterrupted()) {
+				while (!service.isInterrupted()) {
 					long now = System.currentTimeMillis();
 					if (now - lastAccessed > dynamicTtl * 1000) {
 						lastAccessed = now;
@@ -537,7 +535,7 @@ public class DDNS {
 				httpServer.createContext("/", exchange -> serviceHttp(exchange, auth_, dynamicTtl));
 				httpServer.start();
 			} catch (IOException e) {
-				Log.e(e);
+				Log.w("Failed to start HttpServer (" + httpPort + "): " + e.getMessage());
 			}
 		}
 		// Metric
@@ -561,8 +559,8 @@ public class DDNS {
 		// For Debug on localhost (192.168.0.1:53 is bound by Microsoft Loopback Adapter)
 		// try (DatagramSocket socket = new DatagramSocket(new InetSocketAddress("127.0.0.1", port))) {
 		try (DatagramSocket socket = new DatagramSocket(port)) {
-			hook.register(socket);
-			hook.execute(Runnables.wrap(() -> {
+			service.register(socket);
+			service.execute(Runnables.wrap(() -> {
 				try {
 					while (true) {
 						DataEntry dataEntry = dataQueue.take();
@@ -628,11 +626,12 @@ public class DDNS {
 				}
 			}
 		} catch (IOException e) {
-			Log.w(e.getMessage());
-			hook.handle(null); // Interrupt when failed
+			Log.w("Failed to open DatagramSocket (" + port +
+					") or receive DatagramPacket: " + e.getMessage());
+			service.shutdownNow(); // Interrupt when failed
 		} catch (Error | RuntimeException e) {
 			Log.e(e);
-			hook.handle(null); // Interrupt when failed
+			service.shutdownNow(); // Interrupt when failed
 		}
 
 		if (httpServer != null) {
@@ -643,5 +642,6 @@ public class DDNS {
 		Runnables.shutdown(timer);
 		Log.i("DDNS Stopped");
 		Conf.closeLogger(Log.getAndSet(logger));
+		service.shutdown();
 	}
 }
