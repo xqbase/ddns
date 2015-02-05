@@ -554,7 +554,6 @@ public class DDNS {
 		MetricClient.startup(addrs.toArray(new InetSocketAddress[0]));
 		timer.scheduleAtFixedRate(Runnables.wrap(new ManagementMonitor("ddns.server")),
 				0, 5000, TimeUnit.MILLISECONDS);
-		Log.i("DDNS Started");
 
 		// For Debug on localhost (192.168.0.1:53 is bound by Microsoft Loopback Adapter)
 		// try (DatagramSocket socket = new DatagramSocket(new InetSocketAddress("127.0.0.1", port))) {
@@ -577,6 +576,8 @@ public class DDNS {
 					// Exit Polling
 				}
 			}));
+			Log.i("DDNS Started on UDP port " + port);
+
 			while (!Thread.interrupted()) {
 				// Load Properties
 				if (propPeriod > 0) {
