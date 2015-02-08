@@ -483,6 +483,8 @@ public class DDNS {
 
 		Properties p = Conf.load("DDNS");
 		int port = Numbers.parseInt(p.getProperty("port"), 53);
+		String host = p.getProperty("host");
+		host = host == null || host.isEmpty() ? "0.0.0.0" : host;
 		int dynamicTtl = Numbers.parseInt(p.getProperty("ttl.dynamic"), 10);
 		propPeriod = Numbers.parseInt(p.getProperty("prop.period")) * 1000;
 		// DoS
@@ -525,6 +527,8 @@ public class DDNS {
 		}
 		// HTTP Updating Service
 		int httpPort = Numbers.parseInt(p.getProperty("http.port"), 5380);
+		String httpHost = p.getProperty("http.host");
+		httpHost = httpHost == null || httpHost.isEmpty() ? "0.0.0.0" : httpHost;
 		HttpServer httpServer = null;
 		if (httpPort > 0) {
 			String auth = p.getProperty("http.auth");
@@ -534,8 +538,10 @@ public class DDNS {
 				httpServer = HttpServer.create(new InetSocketAddress(httpPort), 50);
 				httpServer.createContext("/", exchange -> serviceHttp(exchange, auth_, dynamicTtl));
 				httpServer.start();
+				Log.i("DDNS Management Service Started on " + httpHost + ":" + httpPort);
 			} catch (IOException e) {
-				Log.w("Failed to start HttpServer (" + httpPort + "): " + e.getMessage());
+				Log.w("Failed to start HttpServer (" +
+						httpHost + ":" + httpPort + "): " + e.getMessage());
 			}
 		}
 		// Metric
@@ -555,9 +561,8 @@ public class DDNS {
 		timer.scheduleAtFixedRate(Runnables.wrap(new ManagementMonitor("ddns.server")),
 				0, 5000, TimeUnit.MILLISECONDS);
 
-		// For Debug on localhost (192.168.0.1:53 is bound by Microsoft Loopback Adapter)
-		// try (DatagramSocket socket = new DatagramSocket(new InetSocketAddress("127.0.0.1", port))) {
-		try (DatagramSocket socket = new DatagramSocket(port)) {
+		try (DatagramSocket socket = new DatagramSocket(new
+				InetSocketAddress(host, port))) {
 			service.register(socket);
 			service.execute(Runnables.wrap(() -> {
 				try {
@@ -576,7 +581,7 @@ public class DDNS {
 					// Exit Polling
 				}
 			}));
-			Log.i("DDNS Started on UDP port " + port);
+			Log.i("DDNS Started on UDP " + host + ":" + port);
 
 			while (!Thread.interrupted()) {
 				// Load Properties
