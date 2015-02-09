@@ -13,6 +13,7 @@ import java.net.SocketAddress;
 import java.net.SocketTimeoutException;
 import java.net.URI;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
@@ -47,7 +48,6 @@ import org.xbill.DNS.Type;
 
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
-import com.sun.org.apache.xerces.internal.impl.dv.util.Base64;
 import com.xqbase.metric.client.ManagementMonitor;
 import com.xqbase.metric.client.MetricClient;
 import com.xqbase.metric.common.Metric;
@@ -109,9 +109,7 @@ public class DDNS {
 			recordList.add(new ARecord(origin, DClass.IN,
 					ttl, InetAddress.getByAddress(ip)));
 		}
-		if (!recordList.isEmpty()) {
-			records.put(host, recordList.toArray(EMPTY_RECORDS));
-		}
+		records.put(host, recordList.toArray(EMPTY_RECORDS));
 	}
 
 	private static void updateDynamics(HttpPool addrApi, int ttl) {
@@ -533,7 +531,7 @@ public class DDNS {
 		if (httpPort > 0) {
 			String auth = p.getProperty("http.auth");
 			String auth_ = auth == null ? null :
-					"Basic " + Base64.encode(auth.getBytes());
+					"Basic " + Base64.getEncoder().encodeToString(auth.getBytes());
 			try {
 				httpServer = HttpServer.create(new InetSocketAddress(httpPort), 50);
 				httpServer.createContext("/", exchange -> serviceHttp(exchange, auth_, dynamicTtl));
