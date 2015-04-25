@@ -260,8 +260,6 @@ public class DDNS {
 		if (header.getFlag(Flags.QR)) {
 			return null;
 		}
-		header.setFlag(Flags.QR);
-		Record question = request.getQuestion();
 		if (header.getRcode() != Rcode.NOERROR) {
 			header.setRcode(Rcode.FORMERR);
 			return request;
@@ -270,8 +268,19 @@ public class DDNS {
 			header.setRcode(Rcode.NOTIMP);
 			return request;
 		}
+		header.setFlag(Flags.QR);
+		Record question = request.getQuestion();
+		if (question == null) {
+			header.setRcode(Rcode.FORMERR);
+			return request;
+		}
+		Name name = question.getName();
+		if (name == null) {
+			header.setRcode(Rcode.FORMERR);
+			return request;
+		}
+		String host = name.toString(true).toLowerCase();
 		// Get ANSWER Records
-		String host = question.getName().toString(true).toLowerCase();
 		Record[] answers;
 		int type = question.getType();
 		switch (type) {
@@ -290,7 +299,6 @@ public class DDNS {
 				break;
 			}
 			// Set name for wildcard
-			Name name;
 			try {
 				name = new Name(host.endsWith(".") ? host : host + ".");
 			} catch (IOException e) {
@@ -393,8 +401,8 @@ public class DDNS {
 			}
 		}
 		// Set ADDITIONAL
-		for (Name name : addNames) {
-			Record[] additionals = aRecords.get(name.
+		for (Name addName : addNames) {
+			Record[] additionals = aRecords.get(addName.
 					toString(true).toLowerCase());
 			if (additionals != null) {
 				for (Record record : additionals) {
