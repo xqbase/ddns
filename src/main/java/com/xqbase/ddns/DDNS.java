@@ -81,7 +81,6 @@ public class DDNS {
 	private static ArrayList<InetSocketAddress> dnss = new ArrayList<>();
 	private static LinkedBlockingQueue<DataEntry> dataQueue = new LinkedBlockingQueue<>();
 	private static Service service = new Service();
-	private static Properties dynamicRecords;
 	private static HashMap<String, Integer> countMap = new HashMap<>();
 	private static long propAccessed = 0, dosAccessed = 0;
 	private static int propPeriod, dosPeriod, dosRequests;
@@ -89,6 +88,10 @@ public class DDNS {
 
 	private static void updateRecords(Map<String, Record[]> records,
 			String host, String value, int ttl) throws IOException {
+		if (value == null) {
+			records.remove(host);
+			return;
+		}
 		Name origin = new Name((host.endsWith(".") ? host : host + ".").replace('_', '-'));
 		ArrayList<Record> recordList = new ArrayList<>();
 		for (String s : value.split("[,;]")) {
@@ -110,6 +113,25 @@ public class DDNS {
 					ttl, InetAddress.getByAddress(ip)));
 		}
 		records.put(host, recordList.toArray(EMPTY_RECORDS));
+	}
+
+	private static Properties getRecords(Map<String, Record[]> records) {
+		Properties p = new Properties();
+		for (Map.Entry<String, Record[]> entry : records.entrySet()) {
+			StringBuilder sb = new StringBuilder();
+			for (Record record : entry.getValue()) {
+				if (record instanceof ARecord) {
+					sb.append(((ARecord) record).getAddress().getHostAddress());
+				} else if (record instanceof CNAMERecord) {
+					sb.append(((CNAMERecord) record).getTarget().
+							toString(true).toLowerCase());
+				}
+				sb.append(',');
+			}
+			p.setProperty(entry.getKey(), sb.substring(0,
+					Math.max(sb.length() - 1, 0)));
+		}
+		return p;
 	}
 
 	private static void updateDynamics(HttpPool addrApi, int ttl) {
@@ -285,7 +307,7 @@ public class DDNS {
 				break;
 			}
 			answers = resolveWildcard(aWildcards, host, domain);
-			if (answers == null) {
+			if (answers == null || answers.length == 0) {
 				answers = aDynamics.get(host);
 				break;
 			}
@@ -451,19 +473,28 @@ public class DDNS {
 		String query = uri.getQuery();
 		if (query == null) {
 			exchange.getResponseHeaders().add("Content-Type", "application/json");
-			response(exchange, 200,
-					new JSONObject(dynamicRecords).toString().getBytes());
+			response(exchange, 200, JSONObject.
+					wrap(getRecords(aDynamics)).toString().getBytes());
 			return;
 		}
 		String[] s = query.split("=");
-		if (s.length != 2) {
+		if (s.length == 0 || s[0].isEmpty()) {
 			response(exchange, 400, null);
 			return;
 		}
-		dynamicRecords.setProperty(s[0], s[1]);
-		Conf.store("DynamicRecords", dynamicRecords);
+		String name = s[0];
+		String addr;
+		if (s.length == 1 || s[1].isEmpty()) {
+			addr = null;
+		} else if (s[1].charAt(0) == '_') {
+			InetAddress addr_ = exchange.getRemoteAddress().getAddress();
+			addr = addr_ instanceof Inet4Address ? addr_.getHostAddress() : null;
+		} else {
+			addr = s[1];
+		}
+		// Always Store ?
 		try {
-			updateRecords(aDynamics, s[0], s[1], ttl);
+			updateRecords(aDynamics, name, addr, ttl);
 			response(exchange, 200, null);
 		} catch (IOException e) {
 			Log.w(e.getMessage());
@@ -516,9 +547,8 @@ public class DDNS {
 		}
 		// Load Static and Dynamic Records
 		loadProp();
-		dynamicRecords = Conf.load("DynamicRecords");
 		try {
-			for (Map.Entry<?, ?> entry : dynamicRecords.entrySet()) {
+			for (Map.Entry<?, ?> entry : Conf.load("DynamicRecords").entrySet()) {
 				updateRecords(aDynamics, (String) entry.getKey(),
 						(String) entry.getValue(), dynamicTtl);
 			}
@@ -559,7 +589,12 @@ public class DDNS {
 		}
 		MetricClient.startup(addrs.toArray(new InetSocketAddress[0]));
 		timer.scheduleAtFixedRate(Runnables.wrap(new ManagementMonitor("ddns.server")),
-				0, 5000, TimeUnit.MILLISECONDS);
+				0, 5, TimeUnit.SECONDS);
+
+		// Persist Dynamic Records Every Second
+		timer.scheduleAtFixedRate(Runnables.wrap(() ->
+				Conf.store("DynamicRecords", getRecords(aDynamics))),
+				1, 1, TimeUnit.SECONDS);
 
 		try (DatagramSocket socket = new DatagramSocket(new
 				InetSocketAddress(host, port))) {
