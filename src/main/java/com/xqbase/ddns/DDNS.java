@@ -85,6 +85,7 @@ public class DDNS {
 	private static long propAccessed = 0, dosAccessed = 0;
 	private static int propPeriod, dosPeriod, dosRequests;
 	private static boolean verbose = false;
+	private static volatile boolean needWriteBack = false;
 
 	private static void updateRecords(Map<String, Record[]> records,
 			String host, String value, int ttl) throws IOException {
@@ -503,6 +504,7 @@ public class DDNS {
 		// Always Store ?
 		try {
 			updateRecords(aDynamics, name, addr, ttl);
+			needWriteBack = true;
 			response(exchange, 200, null);
 		} catch (IOException e) {
 			Log.w(e.getMessage());
@@ -600,9 +602,12 @@ public class DDNS {
 				0, 5, TimeUnit.SECONDS);
 
 		// Persist Dynamic Records Every Second
-		timer.scheduleAtFixedRate(Runnables.wrap(() ->
-				Conf.store("DynamicRecords", getRecords(aDynamics))),
-				1, 1, TimeUnit.SECONDS);
+		timer.scheduleAtFixedRate(Runnables.wrap(() -> {
+			if (needWriteBack) {
+				needWriteBack = false;
+				Conf.store("DynamicRecords", getRecords(aDynamics));
+			}
+		}), 1, 1, TimeUnit.SECONDS);
 
 		try (DatagramSocket socket = new DatagramSocket(new
 				InetSocketAddress(host, port))) {
