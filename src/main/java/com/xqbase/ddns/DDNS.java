@@ -14,6 +14,7 @@ import java.net.SocketTimeoutException;
 import java.net.URI;
 import java.util.ArrayList;
 import java.util.Base64;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
@@ -135,10 +136,11 @@ public class DDNS {
 		return p;
 	}
 
-	private static void updateDynamics(HttpPool addrApi, int ttl) {
+	private static void updateDynamics(HttpPool addrApi,
+			Map<String, List<String>> addrApiAuth, int ttl) {
 		ByteArrayQueue body = new ByteArrayQueue();
 		try {
-			if (addrApi.get("", null, body, null) >= 400) {
+			if (addrApi.get("", addrApiAuth, body, null) >= 400) {
 				Log.w(body.toString());
 				return;
 			}
@@ -532,16 +534,25 @@ public class DDNS {
 		dosPeriod = Numbers.parseInt(p.getProperty("dos.period")) * 1000;
 		dosRequests = Numbers.parseInt(p.getProperty("dos.requests"));
 		// API Client
-		String addrApiUrl = p.getProperty("api.addr");
+		String addrApiUrl = p.getProperty("addr.url");
 		if (addrApiUrl != null) {
 			HttpPool addrApi = new HttpPool(addrApiUrl, dynamicTtl * 2000);
+			Map<String, List<String>> addrApiAuth;
+			String addrApiAuth_ = p.getProperty("addr.auth");
+			if (addrApiAuth_ == null) {
+				addrApiAuth = null;
+			} else {
+				addrApiAuth = Collections.singletonMap("Authorization",
+						Collections.singletonList("Basic " + Base64.getEncoder().
+						encodeToString(addrApiAuth_.getBytes())));
+			}
 			executor.execute(Runnables.wrap(() -> {
 				long lastAccessed = 0;
 				while (!service.isInterrupted()) {
 					long now = System.currentTimeMillis();
 					if (now - lastAccessed > dynamicTtl * 1000) {
 						lastAccessed = now;
-						updateDynamics(addrApi, dynamicTtl);
+						updateDynamics(addrApi, addrApiAuth, dynamicTtl);
 					}
 					Time.sleep(16);
 				}
