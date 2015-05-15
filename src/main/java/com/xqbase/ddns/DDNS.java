@@ -74,13 +74,16 @@ class DataEntry {
 
 public class DDNS {
 	private static final Record[] EMPTY_RECORDS = new Record[0];
+	private static volatile HashMap<String, Record[]>
+			aApiRecords = new HashMap<>();
 	private static ConcurrentHashMap<String, Record[]>
 			aDynamics = new ConcurrentHashMap<>();
 	private static HashMap<String, Record[]>
 			aRecords = new HashMap<>(), aWildcards = new HashMap<>(),
 			nsRecords = new HashMap<>(), mxRecords = new HashMap<>();
 	private static ArrayList<InetSocketAddress> dnss = new ArrayList<>();
-	private static LinkedBlockingQueue<DataEntry> dataQueue = new LinkedBlockingQueue<>();
+	private static LinkedBlockingQueue<DataEntry>
+			dataQueue = new LinkedBlockingQueue<>();
 	private static Service service = new Service();
 	private static HashMap<String, Integer> countMap = new HashMap<>();
 	private static long propAccessed = 0, dosAccessed = 0;
@@ -136,7 +139,7 @@ public class DDNS {
 		return p;
 	}
 
-	private static void updateDynamics(HttpPool addrApi,
+	private static void updateFromApi(HttpPool addrApi,
 			Map<String, List<String>> addrApiAuth, int ttl) {
 		ByteArrayQueue body = new ByteArrayQueue();
 		try {
@@ -149,15 +152,17 @@ public class DDNS {
 			return;
 		}
 		try {
+			HashMap<String, Record[]> apiRecords_ = new HashMap<>();
 			JSONObject map = new JSONObject(body.toString());
 			Iterator<?> it = map.keys();
 			while (it.hasNext()) {
 				String host = (String) it.next();
 				String addr = map.optString(host);
 				if (addr != null) {
-					updateRecords(aDynamics, host, addr, ttl);
+					updateRecords(apiRecords_, host, addr, ttl);
 				}
 			}
+			aApiRecords = apiRecords_;
 		} catch (IOException | JSONException e) {
 			Log.e(e);
 		}
@@ -320,7 +325,11 @@ public class DDNS {
 			}
 			answers = resolveWildcard(aWildcards, host, domain);
 			if (answers == null || answers.length == 0) {
-				answers = aDynamics.get(host);
+				// Records from Addr-Api is Preferred
+				answers = aApiRecords.get(host);
+				if (answers == null || answers.length == 0) {
+					answers = aDynamics.get(host);
+				}
 				break;
 			}
 			// Set name for wildcard
@@ -552,7 +561,7 @@ public class DDNS {
 					long now = System.currentTimeMillis();
 					if (now - lastAccessed > dynamicTtl * 1000) {
 						lastAccessed = now;
-						updateDynamics(addrApi, addrApiAuth, dynamicTtl);
+						updateFromApi(addrApi, addrApiAuth, dynamicTtl);
 					}
 					Time.sleep(16);
 				}
@@ -612,13 +621,14 @@ public class DDNS {
 		timer.scheduleAtFixedRate(Runnables.wrap(new ManagementMonitor("ddns.server")),
 				0, 5, TimeUnit.SECONDS);
 
-		// Persist Dynamic Records Every Second
-		timer.scheduleAtFixedRate(Runnables.wrap(() -> {
+		Runnable writeBack = Runnables.wrap(() -> {
 			if (needWriteBack) {
 				needWriteBack = false;
 				Conf.store("DynamicRecords", getRecords(aDynamics));
 			}
-		}), 1, 1, TimeUnit.SECONDS);
+		});
+		// Persist Dynamic Records Every Second
+		timer.scheduleAtFixedRate(writeBack, 1, 1, TimeUnit.SECONDS);
 
 		try (DatagramSocket socket = new DatagramSocket(new
 				InetSocketAddress(host, port))) {
@@ -705,6 +715,7 @@ public class DDNS {
 		MetricClient.shutdown();
 		Runnables.shutdown(executor);
 		Runnables.shutdown(timer);
+		writeBack.run();
 		Log.i("DDNS Stopped");
 		Conf.closeLogger(Log.getAndSet(logger));
 		service.shutdown();
