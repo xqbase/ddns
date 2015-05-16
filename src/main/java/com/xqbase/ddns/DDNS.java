@@ -122,9 +122,9 @@ public class DDNS {
 
 	private static Properties getRecords(Map<String, Record[]> records) {
 		Properties p = new Properties();
-		for (Map.Entry<String, Record[]> entry : records.entrySet()) {
+		records.forEach((k, v) -> {
 			StringBuilder sb = new StringBuilder();
-			for (Record record : entry.getValue()) {
+			for (Record record : v) {
 				if (record instanceof ARecord) {
 					sb.append(((ARecord) record).getAddress().getHostAddress());
 				} else if (record instanceof CNAMERecord) {
@@ -133,9 +133,8 @@ public class DDNS {
 				}
 				sb.append(',');
 			}
-			p.setProperty(entry.getKey(), sb.substring(0,
-					Math.max(sb.length() - 1, 0)));
-		}
+			p.setProperty(k, sb.substring(0, Math.max(sb.length() - 1, 0)));
+		});
 		return p;
 	}
 
@@ -577,14 +576,14 @@ public class DDNS {
 		}
 		// Load Static and Dynamic Records
 		loadProp();
-		try {
-			for (Map.Entry<?, ?> entry : Conf.load("DynamicRecords").entrySet()) {
-				updateRecords(aDynamics, (String) entry.getKey(),
-						(String) entry.getValue(), dynamicTtl);
+		Conf.load("DynamicRecords").forEach((k, v) -> {
+			try {
+				updateRecords(aDynamics, (String) k,
+						(String) v, dynamicTtl);
+			} catch (IOException e) {
+				Log.e(e);
 			}
-		} catch (IOException e) {
-			Log.e(e);
-		}
+		});
 		// HTTP Updating Service
 		int httpPort = Numbers.parseInt(p.getProperty("http.port"), 5380);
 		String httpHost = p.getProperty("http.host");
