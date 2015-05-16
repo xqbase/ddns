@@ -120,11 +120,11 @@ public class DDNS {
 		records.put(host, recordList.toArray(EMPTY_RECORDS));
 	}
 
-	private static Properties getRecords(Map<String, Record[]> records) {
-		Properties p = new Properties();
-		records.forEach((k, v) -> {
+	private static HashMap<String, String> getDynamicMap() {
+		HashMap<String, String> dynamicMap = new HashMap<>();
+		aDynamics.forEach((host, records) -> {
 			StringBuilder sb = new StringBuilder();
-			for (Record record : v) {
+			for (Record record : records) {
 				if (record instanceof ARecord) {
 					sb.append(((ARecord) record).getAddress().getHostAddress());
 				} else if (record instanceof CNAMERecord) {
@@ -133,9 +133,9 @@ public class DDNS {
 				}
 				sb.append(',');
 			}
-			p.setProperty(k, sb.substring(0, Math.max(sb.length() - 1, 0)));
+			dynamicMap.put(host, sb.substring(0, Math.max(sb.length() - 1, 0)));
 		});
-		return p;
+		return dynamicMap;
 	}
 
 	private static void updateFromApi(HttpPool addrApi,
@@ -493,7 +493,7 @@ public class DDNS {
 		if (query == null) {
 			exchange.getResponseHeaders().add("Content-Type", "application/json");
 			response(exchange, 200, JSONObject.
-					wrap(getRecords(aDynamics)).toString().getBytes());
+					wrap(getDynamicMap()).toString().getBytes());
 			return;
 		}
 		String[] s = query.split("=");
@@ -623,7 +623,9 @@ public class DDNS {
 		Runnable writeBack = Runnables.wrap(() -> {
 			if (needWriteBack) {
 				needWriteBack = false;
-				Conf.store("DynamicRecords", getRecords(aDynamics));
+				Properties dynamicRedords = new Properties();
+				dynamicRedords.putAll(getDynamicMap());
+				Conf.store("DynamicRecords", dynamicRedords);
 			}
 		});
 		// Persist Dynamic Records Every Second
