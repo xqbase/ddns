@@ -176,9 +176,9 @@ public class DDNS {
 		verbose = Conf.getBoolean(p.getProperty("verbose"), false);
 		int mxPriority = Numbers.parseInt(p.getProperty("priority.mx"), 10);
 		int staticTtl = Numbers.parseInt(p.getProperty("ttl.static"), 3600);
-		for (Map.Entry<?, ?> entry : p.entrySet()) {
-			String key = (String) entry.getKey();
-			String value = (String) entry.getValue();
+		p.forEach((k, v) -> {
+			String key = (String) k;
+			String value = (String) v;
 			try {
 				if (key.startsWith("ns_")) {
 					String host = key.substring(3);
@@ -191,7 +191,7 @@ public class DDNS {
 					if (!records.isEmpty()) {
 						nsRecords.put(host, records.toArray(EMPTY_RECORDS));
 					}
-					continue;
+					return;
 				}
 				if (key.startsWith("mx_")) {
 					String host = key.substring(3);
@@ -204,10 +204,10 @@ public class DDNS {
 					if (!records.isEmpty()) {
 						mxRecords.put(host, records.toArray(EMPTY_RECORDS));
 					}
-					continue;
+					return;
 				}
 				if (!key.startsWith("a_")) {
-					continue;
+					return;
 				}
 				String host = key.substring(2);
 				if (host.startsWith("*.")) {
@@ -218,7 +218,7 @@ public class DDNS {
 			} catch (IOException e) {
 				Log.e(e);
 			}
-		}
+		});
 	}
 
 	private static boolean blocked(String ip) {
