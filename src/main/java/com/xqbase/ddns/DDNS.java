@@ -605,15 +605,12 @@ public class DDNS {
 		}
 		// Metric
 		ArrayList<InetSocketAddress> addrs = new ArrayList<>();
-		String addresses = p.getProperty("metric.collectors");
-		if (addresses != null) {
-			String[] s = addresses.split("[,;]");
-			for (int i = 0; i < s.length; i ++) {
-				String[] ss = s[i].split("[:/]");
-				if (ss.length >= 2) {
-					addrs.add(new InetSocketAddress(ss[0],
-							Numbers.parseInt(ss[1], 5514)));
-				}
+		String addresses = p.getProperty("metric.collectors", "");
+		for (String s : addresses.split("[,;]")) {
+			String[] ss = s.split("[:/]");
+			if (ss.length > 1) {
+				addrs.add(new InetSocketAddress(ss[0],
+						Numbers.parseInt(ss[1], 5514, 0, 65535)));
 			}
 		}
 		MetricClient.startup(addrs.toArray(new InetSocketAddress[0]));
