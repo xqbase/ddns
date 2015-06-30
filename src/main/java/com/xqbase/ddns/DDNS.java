@@ -81,7 +81,7 @@ public class DDNS {
 	private static HashMap<String, Record[]>
 			aRecords = new HashMap<>(), aWildcards = new HashMap<>(),
 			nsRecords = new HashMap<>(), mxRecords = new HashMap<>();
-	private static ArrayList<InetSocketAddress> dnss = new ArrayList<>();
+	private static ArrayList<InetSocketAddress> forwards = new ArrayList<>();
 	private static LinkedBlockingQueue<DataEntry>
 			dataQueue = new LinkedBlockingQueue<>();
 	private static Service service = new Service();
@@ -446,11 +446,11 @@ public class DDNS {
 		return response;
 	}
 
-	private static void serviceDns(SocketAddress addr, byte[] reqData, byte[] respData) {
-		for (InetSocketAddress dns : dnss) {
+	private static void forward(SocketAddress addr, byte[] reqData, byte[] respData) {
+		for (InetSocketAddress forward : forwards) {
 			try (DatagramSocket socket = new DatagramSocket()) {
 				socket.setSoTimeout(1000);
-				socket.send(new DatagramPacket(reqData, reqData.length, dns));
+				socket.send(new DatagramPacket(reqData, reqData.length, forward));
 				byte[] data = new byte[65536];
 				DatagramPacket packet = new DatagramPacket(data, data.length);
 				try {
@@ -567,11 +567,11 @@ public class DDNS {
 				addrApi.close();
 			}));
 		}
-		// External DNS
-		String dns = p.getProperty("dns");
-		if (dns != null && !dns.isEmpty()) {
-			for (String s : dns.split("[,;]")) {
-				dnss.add(new InetSocketAddress(s, 53));
+		// Forward to External DNS
+		String forward = p.getProperty("forward");
+		if (forward != null && !forward.isEmpty()) {
+			for (String s : forward.split("[,;]")) {
+				forwards.add(new InetSocketAddress(s, 53));
 			}
 		}
 		// Load Static and Dynamic Records
@@ -690,12 +690,12 @@ public class DDNS {
 						"name", "" + domain[0], "type", question == null ?
 						"null" : Type.string(question.getType()));
 				byte[] respData = response.toWire();
-				if (dnss.isEmpty() || rcode < Rcode.NXDOMAIN) {
+				if (forwards.isEmpty() || rcode < Rcode.NXDOMAIN) {
 					// Send
 					dataQueue.offer(new DataEntry(remote, respData));
 				} else {
-					// Call DNS Service in Branch Thread
-					executor.execute(Runnables.wrap(() -> serviceDns(remote, reqData, respData)));
+					// Call Forward in Branch Thread
+					executor.execute(Runnables.wrap(() -> forward(remote, reqData, respData)));
 				}
 			}
 		} catch (IOException e) {
