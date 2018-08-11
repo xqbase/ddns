@@ -22,8 +22,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
@@ -59,7 +57,6 @@ import com.xqbase.util.Log;
 import com.xqbase.util.Numbers;
 import com.xqbase.util.Runnables;
 import com.xqbase.util.Service;
-import com.xqbase.util.Time;
 import com.xqbase.util.http.HttpPool;
 
 class DataEntry {
@@ -529,7 +526,6 @@ public class DDNS {
 		System.setProperty("java.util.logging.SimpleFormatter.format",
 				"%1$tY-%1$tm-%1$td %1$tk:%1$tM:%1$tS.%1$tL %2$s%n%4$s: %5$s%6$s%n");
 		Logger logger = Log.getAndSet(Conf.openLogger("DDNS.", 16777216, 10));
-		ExecutorService executor = Executors.newCachedThreadPool();
 		ScheduledThreadPoolExecutor timer = new ScheduledThreadPoolExecutor(1);
 
 		Properties p = Conf.load("DDNS");
@@ -543,8 +539,11 @@ public class DDNS {
 		dosRequests = Numbers.parseInt(p.getProperty("dos.requests"));
 		// API Client
 		String addrApiUrl = p.getProperty("addr.url");
-		if (addrApiUrl != null) {
-			HttpPool addrApi = new HttpPool(addrApiUrl, dynamicTtl * 2000);
+		HttpPool addrApi;
+		if (addrApiUrl == null) {
+			addrApi = null;
+		} else {
+			addrApi = new HttpPool(addrApiUrl, dynamicTtl * 2000);
 			Map<String, List<String>> addrApiAuth;
 			String addrApiAuth_ = p.getProperty("addr.auth");
 			if (addrApiAuth_ == null) {
@@ -554,18 +553,9 @@ public class DDNS {
 						Collections.singletonList("Basic " + Base64.getEncoder().
 						encodeToString(addrApiAuth_.getBytes())));
 			}
-			executor.execute(Runnables.wrap(() -> {
-				long lastAccessed = 0;
-				while (!service.isInterrupted()) {
-					long now = System.currentTimeMillis();
-					if (now - lastAccessed > dynamicTtl * 1000) {
-						lastAccessed = now;
-						updateFromApi(addrApi, addrApiAuth, dynamicTtl);
-					}
-					Time.sleep(16);
-				}
-				addrApi.close();
-			}));
+			timer.scheduleWithFixedDelay(() ->
+					updateFromApi(addrApi, addrApiAuth, dynamicTtl),
+					dynamicTtl, dynamicTtl, TimeUnit.SECONDS);
 		}
 		// Forward to External DNS
 		String forward = p.getProperty("forward");
@@ -695,7 +685,7 @@ public class DDNS {
 					dataQueue.offer(new DataEntry(remote, respData));
 				} else {
 					// Call Forward in Branch Thread
-					executor.execute(Runnables.wrap(() -> forward(remote, reqData, respData)));
+					service.execute(Runnables.wrap(() -> forward(remote, reqData, respData)));
 				}
 			}
 		} catch (IOException e) {
@@ -711,8 +701,10 @@ public class DDNS {
 			httpServer.stop(0);
 		}
 		MetricClient.shutdown();
-		Runnables.shutdown(executor);
 		Runnables.shutdown(timer);
+		if (addrApi != null) {
+			addrApi.close();
+		}
 		writeBack.run();
 		Log.i("DDNS Stopped");
 		Conf.closeLogger(Log.getAndSet(logger));
