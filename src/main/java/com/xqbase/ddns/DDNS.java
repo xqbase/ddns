@@ -42,6 +42,7 @@ import org.xbill.DNS.Name;
 import org.xbill.DNS.Opcode;
 import org.xbill.DNS.Rcode;
 import org.xbill.DNS.Record;
+import org.xbill.DNS.SOARecord;
 import org.xbill.DNS.Section;
 import org.xbill.DNS.Type;
 
@@ -58,6 +59,7 @@ import com.xqbase.util.Numbers;
 import com.xqbase.util.Runnables;
 import com.xqbase.util.Service;
 import com.xqbase.util.http.HttpPool;
+import com.xqbase.util.http.HttpUtil;
 
 class DataEntry {
 	SocketAddress addr;
@@ -71,6 +73,8 @@ class DataEntry {
 
 public class DDNS {
 	private static final Record[] EMPTY_RECORDS = new Record[0];
+	private static String publicIp = null;
+	private static volatile SOARecord soaRecord = null;
 	private static volatile HashMap<String, Record[]>
 			aApiRecords = new HashMap<>();
 	private static ConcurrentHashMap<String, Record[]>
@@ -184,6 +188,12 @@ public class DDNS {
 					for (String target : value.split("[,;]")) {
 						records.add(new NSRecord(origin, DClass.IN, staticTtl,
 								new Name(target.endsWith(".") ? target : target + ".")));
+						if (target.equals(publicIp)) {
+							// TODO
+							soaRecord = new SOARecord(new Name(target), DClass.IN,
+									staticTtl, new Name(host), new Name("admin." + host),
+									0, 0, 0, 0, 0);
+						}
 					}
 					if (!records.isEmpty()) {
 						nsRecords.put(host, records.toArray(EMPTY_RECORDS));
@@ -332,7 +342,7 @@ public class DDNS {
 			try {
 				name = new Name(host.endsWith(".") ? host : host + ".");
 			} catch (IOException e) {
-				Log.w(e.getMessage());
+				Log.w("Unrecognized host \"" + host + "\": " + e.getMessage());
 				break;
 			}
 			// Do not pollute "aWildcards"
@@ -471,6 +481,7 @@ public class DDNS {
 				exchange.getResponseBody().write(data);
 			}
 		} catch (IOException e) {
+			// TODO More Details
 			Log.w(e.getMessage());
 		}
 		exchange.close();
@@ -514,6 +525,7 @@ public class DDNS {
 			needWriteBack = true;
 			response(exchange, 200, null);
 		} catch (IOException e) {
+			// TODO More Details
 			Log.w(e.getMessage());
 			response(exchange, 400, null);
 		}
@@ -562,6 +574,20 @@ public class DDNS {
 		if (forward != null && !forward.isEmpty()) {
 			for (String s : forward.split("[,;]")) {
 				forwards.add(new InetSocketAddress(s, 53));
+			}
+		}
+		// Get Public IP
+		String ipUrl = p.getProperty("ip.url");
+		if (ipUrl != null) {
+			ByteArrayQueue baq = new ByteArrayQueue();
+			try {
+				int status = HttpUtil.get(ipUrl, null, baq, null, 15000);
+				if (status == 200) {
+					publicIp = baq.getBytes().toString().split("\\s+", 2)[0];
+				}
+			} catch (IOException e) {
+				// TODO More Details
+				Log.w(e.getMessage());
 			}
 		}
 		// Load Static and Dynamic Records
@@ -631,7 +657,7 @@ public class DDNS {
 							socket.send(packet);
 							dump(packet, true);
 						} catch (IOException e) {
-							Log.w(e);
+							Log.e(e);
 						}
 					}
 				} catch (InterruptedException e) {
@@ -665,6 +691,7 @@ public class DDNS {
 				try {
 					request = new Message(reqData);
 				} catch (IOException e) {
+					// TODO More Details
 					Log.w(e.getMessage());
 					continue;
 				}
