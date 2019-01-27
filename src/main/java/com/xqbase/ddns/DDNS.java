@@ -40,6 +40,7 @@ import org.xbill.DNS.Message;
 import org.xbill.DNS.NSRecord;
 import org.xbill.DNS.Name;
 import org.xbill.DNS.Opcode;
+import org.xbill.DNS.PTRRecord;
 import org.xbill.DNS.Rcode;
 import org.xbill.DNS.Record;
 import org.xbill.DNS.SOARecord;
@@ -59,7 +60,6 @@ import com.xqbase.util.Numbers;
 import com.xqbase.util.Runnables;
 import com.xqbase.util.Service;
 import com.xqbase.util.http.HttpPool;
-import com.xqbase.util.http.HttpUtil;
 
 class DataEntry {
 	SocketAddress addr;
@@ -73,15 +73,14 @@ class DataEntry {
 
 public class DDNS {
 	private static final Record[] EMPTY_RECORDS = new Record[0];
-	private static String publicIp = null;
-	private static volatile SOARecord soaRecord = null;
 	private static volatile HashMap<String, Record[]>
 			aApiRecords = new HashMap<>();
 	private static ConcurrentHashMap<String, Record[]>
 			aDynamics = new ConcurrentHashMap<>();
 	private static HashMap<String, Record[]>
 			aRecords = new HashMap<>(), aWildcards = new HashMap<>(),
-			nsRecords = new HashMap<>(), mxRecords = new HashMap<>();
+			nsRecords = new HashMap<>(), mxRecords = new HashMap<>(),
+			soaRecords = new HashMap<>(), ptrRecords = new HashMap<>();
 	private static ArrayList<InetSocketAddress> forwards = new ArrayList<>();
 	private static LinkedBlockingQueue<DataEntry>
 			dataQueue = new LinkedBlockingQueue<>();
@@ -89,11 +88,13 @@ public class DDNS {
 	private static HashMap<String, Integer> countMap = new HashMap<>();
 	private static long propAccessed = 0, dosAccessed = 0;
 	private static int propPeriod, dosPeriod, dosRequests;
+	private static Name soaAdmin;
 	private static boolean verbose = false;
 	private static volatile boolean needWriteBack = false;
 
 	private static void updateRecords(Map<String, Record[]> records,
-			String host, String value, int ttl) throws IOException {
+			String host, String value, int ttl,
+			Map<String, ArrayList<Record>> ptrRecordMap) throws IOException {
 		if (value == null) {
 			records.remove(host);
 			return;
@@ -117,6 +118,15 @@ public class DDNS {
 			}
 			recordList.add(new ARecord(origin, DClass.IN,
 					ttl, InetAddress.getByAddress(ip)));
+			if (ptrRecordMap != null) {
+				StringBuilder sb = new StringBuilder();
+				for (int i = 3; i >= 0; i --) {
+					sb.append(ip[i] & 0xFF).append('.');
+				}
+				String ipAddr = sb + "in-addr.arpa";
+				ptrRecordMap.computeIfAbsent(ipAddr, key -> new ArrayList<>()).
+						add(new PTRRecord(new Name(ipAddr + "."), DClass.IN, ttl, origin));
+			}
 		}
 		records.put(host, recordList.toArray(EMPTY_RECORDS));
 	}
@@ -159,7 +169,7 @@ public class DDNS {
 				String host = (String) it.next();
 				String addr = map.optString(host);
 				if (addr != null) {
-					updateRecords(apiRecords_, host, addr, ttl);
+					updateRecords(apiRecords_, host, addr, ttl, null);
 				}
 			}
 			aApiRecords = apiRecords_;
@@ -173,10 +183,12 @@ public class DDNS {
 		aWildcards.clear();
 		nsRecords.clear();
 		mxRecords.clear();
+		soaRecords.clear();
 		Properties p = Conf.load("DDNS");
 		verbose = Conf.getBoolean(p.getProperty("verbose"), false);
 		int mxPriority = Numbers.parseInt(p.getProperty("priority.mx"), 10);
 		int staticTtl = Numbers.parseInt(p.getProperty("ttl.static"), 3600);
+		HashMap<String, ArrayList<Record>> ptrRecordMap = new HashMap<>();
 		p.forEach((k, v) -> {
 			String key = (String) k;
 			String value = (String) v;
@@ -188,12 +200,6 @@ public class DDNS {
 					for (String target : value.split("[,;]")) {
 						records.add(new NSRecord(origin, DClass.IN, staticTtl,
 								new Name(target.endsWith(".") ? target : target + ".")));
-						if (target.equals(publicIp)) {
-							// TODO
-							soaRecord = new SOARecord(new Name(target), DClass.IN,
-									staticTtl, new Name(host), new Name("admin." + host),
-									0, 0, 0, 0, 0);
-						}
 					}
 					if (!records.isEmpty()) {
 						nsRecords.put(host, records.toArray(EMPTY_RECORDS));
@@ -213,18 +219,36 @@ public class DDNS {
 					}
 					return;
 				}
+				if (key.startsWith("soa_")) {
+					String host = key.substring(4);
+					Name origin = new Name(host.endsWith(".") ? host : host + ".");
+					ArrayList<Record> records = new ArrayList<>();
+					for (String target : value.split("[,;]")) {
+						records.add(new SOARecord(origin, DClass.IN, staticTtl,
+								new Name(target.endsWith(".") ? target : target + "."),
+								soaAdmin, 1, staticTtl, staticTtl, staticTtl, staticTtl));
+					}
+					if (!records.isEmpty()) {
+						soaRecords.put(host, records.toArray(EMPTY_RECORDS));
+					}
+					return;
+				}
 				if (!key.startsWith("a_")) {
 					return;
 				}
 				String host = key.substring(2);
 				if (host.startsWith("*.")) {
-					updateRecords(aWildcards, host.substring(2), value, staticTtl);
+					updateRecords(aWildcards, host.substring(2), value, staticTtl, null);
 				} else {
-					updateRecords(aRecords, host, value, staticTtl);
+					updateRecords(aRecords, host, value, staticTtl, ptrRecordMap);
 				}
 			} catch (IOException e) {
 				Log.e(e);
 			}
+		});
+		ptrRecords.clear();
+		ptrRecordMap.forEach((host, records) -> {
+			ptrRecords.put(host, records.toArray(EMPTY_RECORDS));
 		});
 	}
 
@@ -366,7 +390,10 @@ public class DDNS {
 			break;
 		case Type.NS:
 		case Type.MX:
-			answers = (type == Type.NS ? nsRecords : mxRecords).get(host);
+		case Type.SOA:
+		case Type.PTR:
+			answers = (type == Type.NS ? nsRecords : type == Type.MX ? mxRecords :
+					type == Type.SOA ? soaRecords : ptrRecords).get(host);
 			if (answers != null) {
 				domain[0] = host;
 			}
@@ -481,8 +508,8 @@ public class DDNS {
 				exchange.getResponseBody().write(data);
 			}
 		} catch (IOException e) {
-			// TODO More Details
-			Log.w(e.getMessage());
+			Log.w("Unable to send response to " +
+					exchange.getRemoteAddress() + ": " + e.getMessage());
 		}
 		exchange.close();
 	}
@@ -521,12 +548,12 @@ public class DDNS {
 		}
 		// Always Store ?
 		try {
-			updateRecords(aDynamics, name, addr, ttl);
+			updateRecords(aDynamics, name, addr, ttl, null);
 			needWriteBack = true;
 			response(exchange, 200, null);
 		} catch (IOException e) {
-			// TODO More Details
-			Log.w(e.getMessage());
+			Log.w("Unable to update record " + name +
+					" -> " + addr + ": " + e.getMessage());
 			response(exchange, 400, null);
 		}
 	}
@@ -549,6 +576,14 @@ public class DDNS {
 		// DoS
 		dosPeriod = Numbers.parseInt(p.getProperty("dos.period")) * 1000;
 		dosRequests = Numbers.parseInt(p.getProperty("dos.requests"));
+		// SOA
+		String admin = p.getProperty("soa.admin");
+		try {
+			soaAdmin = new Name(admin.endsWith(".") ? admin : admin + ".");
+		} catch (IOException e) {
+			Log.w("Unrecognized host \"" + admin + "\": " + e.getMessage());
+			soaAdmin = null;
+		}
 		// API Client
 		String addrApiUrl = p.getProperty("addr.url");
 		HttpPool addrApi;
@@ -576,26 +611,12 @@ public class DDNS {
 				forwards.add(new InetSocketAddress(s, 53));
 			}
 		}
-		// Get Public IP
-		String ipUrl = p.getProperty("ip.url");
-		if (ipUrl != null) {
-			ByteArrayQueue baq = new ByteArrayQueue();
-			try {
-				int status = HttpUtil.get(ipUrl, null, baq, null, 15000);
-				if (status == 200) {
-					publicIp = baq.getBytes().toString().split("\\s+", 2)[0];
-				}
-			} catch (IOException e) {
-				// TODO More Details
-				Log.w(e.getMessage());
-			}
-		}
 		// Load Static and Dynamic Records
 		loadProp();
 		Conf.load("DynamicRecords").forEach((k, v) -> {
 			try {
 				updateRecords(aDynamics, (String) k,
-						(String) v, dynamicTtl);
+						(String) v, dynamicTtl, null);
 			} catch (IOException e) {
 				Log.e(e);
 			}
@@ -615,7 +636,7 @@ public class DDNS {
 				httpServer.start();
 				Log.i("DDNS Management Service Started on " + httpHost + ":" + httpPort);
 			} catch (IOException e) {
-				Log.w("Failed to start HttpServer (" +
+				Log.w("Unable to start HttpServer (" +
 						httpHost + ":" + httpPort + "): " + e.getMessage());
 			}
 		}
@@ -691,8 +712,8 @@ public class DDNS {
 				try {
 					request = new Message(reqData);
 				} catch (IOException e) {
-					// TODO More Details
-					Log.w(e.getMessage());
+					Log.w("Unable to parse " + Bytes.toHexLower(reqData) +
+							": " + e.getMessage());
 					continue;
 				}
 				// Call Service in Trunk Thread
@@ -716,7 +737,7 @@ public class DDNS {
 				}
 			}
 		} catch (IOException e) {
-			Log.w("Failed to open DatagramSocket (" + port +
+			Log.w("Unable to open DatagramSocket (" + port +
 					") or receive DatagramPacket: " + e.getMessage());
 			service.shutdownNow(); // Interrupt when failed
 		} catch (Error | RuntimeException e) {
