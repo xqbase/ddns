@@ -398,6 +398,9 @@ public class DDNS {
 				domain[0] = host;
 			}
 			break;
+		case Type.CAA:
+			answers = null;
+			break;
 		default:
 			header.setRcode(Rcode.NOTIMP);
 			return request;
@@ -429,7 +432,12 @@ public class DDNS {
 			answers = cloned;
 		}
 		// Get AUTHORITY Records
-		Record[] authorities = resolveWildcard(nsRecords, host, domain);
+		Record[] authorities;
+		if (type == Type.CAA) {
+			authorities = soaRecords.get(host);
+		} else {
+			authorities = resolveWildcard(nsRecords, host, domain);
+		}
 		if (answers == null && authorities == null) {
 			// Return NXDOMAIN if AUTHORITY not Found
 			header.setRcode(Rcode.NXDOMAIN);
@@ -457,6 +465,8 @@ public class DDNS {
 					addNames.add(((NSRecord) record).getTarget());
 				} else if (record instanceof MXRecord) {
 					addNames.add(((MXRecord) record).getTarget());
+				} else if (record instanceof SOARecord) {
+					addNames.add(((SOARecord) record).getHost());
 				}
 			}
 		}
@@ -464,7 +474,11 @@ public class DDNS {
 		if (authorities != null) {
 			for (Record record : authorities) {
 				response.addRecord(record, Section.AUTHORITY);
-				addNames.add(((NSRecord) record).getTarget());
+				if (record instanceof NSRecord) {
+					addNames.add(((NSRecord) record).getTarget());
+				} else if (record instanceof SOARecord) {
+					addNames.add(((SOARecord) record).getHost());
+				}
 			}
 		}
 		// Set ADDITIONAL
