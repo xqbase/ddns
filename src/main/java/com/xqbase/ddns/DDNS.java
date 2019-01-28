@@ -572,6 +572,7 @@ public class DDNS {
 		}
 	}
 
+	@SuppressWarnings("resource")
 	public static void main(String[] args) {
 		if (!service.startup(args)) {
 			return;
