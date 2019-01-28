@@ -572,7 +572,6 @@ public class DDNS {
 		}
 	}
 
-	@SuppressWarnings("resource")
 	public static void main(String[] args) {
 		if (!service.startup(args)) {
 			return;
@@ -600,12 +599,10 @@ public class DDNS {
 			soaAdmin = null;
 		}
 		// API Client
+		HttpPool[] addrApi = {null};
 		String addrApiUrl = p.getProperty("addr.url");
-		HttpPool addrApi;
-		if (addrApiUrl == null) {
-			addrApi = null;
-		} else {
-			addrApi = new HttpPool(addrApiUrl, dynamicTtl * 2000);
+		if (addrApiUrl != null) {
+			addrApi[0] = new HttpPool(addrApiUrl, dynamicTtl * 2000);
 			Map<String, List<String>> addrApiAuth;
 			String addrApiAuth_ = p.getProperty("addr.auth");
 			if (addrApiAuth_ == null) {
@@ -616,7 +613,7 @@ public class DDNS {
 						encodeToString(addrApiAuth_.getBytes())));
 			}
 			timer.scheduleWithFixedDelay(() ->
-					updateFromApi(addrApi, addrApiAuth, dynamicTtl),
+					updateFromApi(addrApi[0], addrApiAuth, dynamicTtl),
 					dynamicTtl, dynamicTtl, TimeUnit.SECONDS);
 		}
 		// Forward to External DNS
@@ -765,8 +762,8 @@ public class DDNS {
 		}
 		MetricClient.shutdown();
 		Runnables.shutdown(timer);
-		if (addrApi != null) {
-			addrApi.close();
+		if (addrApi[0] != null) {
+			addrApi[0].close();
 		}
 		writeBack.run();
 		Log.i("DDNS Stopped");
