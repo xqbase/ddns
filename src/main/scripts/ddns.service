@@ -1,0 +1,10 @@
+[Unit]
+Description=Dynamic DNS Service
+[Service]
+Type=simple
+ExecStart=/bin/java -Xms16m -Xmx32m -XX:MaxMetaspaceSize=16m -jar /usr/local/xqbase-ddns/lib/ddns.jar
+Restart=always
+KillMode=process
+RestartSec=1
+[Install]
+WantedBy=multi-user.target
