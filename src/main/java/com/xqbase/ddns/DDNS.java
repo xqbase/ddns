@@ -45,6 +45,7 @@ import org.xbill.DNS.Rcode;
 import org.xbill.DNS.Record;
 import org.xbill.DNS.SOARecord;
 import org.xbill.DNS.Section;
+import org.xbill.DNS.TXTRecord;
 import org.xbill.DNS.Type;
 
 import com.sun.net.httpserver.HttpExchange;
@@ -71,8 +72,15 @@ class DataEntry {
 	}
 }
 
+interface Builder {
+	Record build(Name origin, String target) throws IOException;
+}
+
 public class DDNS {
 	private static final Record[] EMPTY_RECORDS = new Record[0];
+	private static HashMap<String, Builder> builderMap = new HashMap<>();
+	private static HashMap<Integer, HashMap<String, Record[]>>
+			recordsMap = new HashMap<>();
 	private static volatile HashMap<String, Record[]>
 			aApiRecords = new HashMap<>();
 	private static ConcurrentHashMap<String, Record[]>
@@ -80,17 +88,35 @@ public class DDNS {
 	private static HashMap<String, Record[]>
 			aRecords = new HashMap<>(), aWildcards = new HashMap<>(),
 			nsRecords = new HashMap<>(), mxRecords = new HashMap<>(),
-			soaRecords = new HashMap<>(), ptrRecords = new HashMap<>();
+			soaRecords = new HashMap<>(), txtRecords = new HashMap<>(),
+			ptrRecords = new HashMap<>();
 	private static ArrayList<InetSocketAddress> forwards = new ArrayList<>();
 	private static LinkedBlockingQueue<DataEntry>
 			dataQueue = new LinkedBlockingQueue<>();
 	private static Service service = new Service();
 	private static HashMap<String, Integer> countMap = new HashMap<>();
 	private static long propAccessed = 0, dosAccessed = 0;
-	private static int propPeriod, dosPeriod, dosRequests;
+	private static int propPeriod, dosPeriod, dosRequests, staticTtl, mxPriority;
 	private static Name soaAdmin;
 	private static boolean verbose = false;
 	private static volatile boolean needWriteBack = false;
+
+	static {
+		builderMap.put("ns", (origin, target) -> new NSRecord(origin,
+				DClass.IN, staticTtl, new Name(target)));
+		builderMap.put("mx", (origin, target) -> new MXRecord(origin,
+				DClass.IN, staticTtl, mxPriority, new Name(target)));
+		builderMap.put("soa", (origin, target) -> new SOARecord(origin,
+				DClass.IN, staticTtl, new Name(target),
+				soaAdmin, 1, staticTtl, staticTtl, staticTtl, staticTtl));
+		builderMap.put("txt", (origin, target) -> new TXTRecord(origin,
+				DClass.IN, staticTtl, target));
+		recordsMap.put(Integer.valueOf(Type.NS), nsRecords);
+		recordsMap.put(Integer.valueOf(Type.MX), mxRecords);
+		recordsMap.put(Integer.valueOf(Type.SOA), soaRecords);
+		recordsMap.put(Integer.valueOf(Type.TXT), txtRecords);
+		recordsMap.put(Integer.valueOf(Type.PTR), ptrRecords);
+	}
 
 	private static void updateRecords(Map<String, Record[]> records,
 			String host, String value, int ttl,
@@ -99,7 +125,7 @@ public class DDNS {
 			records.remove(host);
 			return;
 		}
-		Name origin = new Name((host.endsWith(".") ? host : host + ".").replace('_', '-'));
+		Name origin = new Name((host.endsWith(".") ? host : host + "."));
 		ArrayList<Record> recordList = new ArrayList<>();
 		for (String s : value.split("[,;]")) {
 			if (s.matches(".*[A-Z|a-z].*")) {
@@ -186,63 +212,43 @@ public class DDNS {
 		soaRecords.clear();
 		Properties p = Conf.load("DDNS");
 		verbose = Conf.getBoolean(p.getProperty("verbose"), false);
-		int mxPriority = Numbers.parseInt(p.getProperty("priority.mx"), 10);
-		int staticTtl = Numbers.parseInt(p.getProperty("ttl.static"), 3600);
+		staticTtl = Numbers.parseInt(p.getProperty("ttl.static"), 3600);
+		mxPriority = Numbers.parseInt(p.getProperty("priority.mx"), 10);
 		HashMap<String, ArrayList<Record>> ptrRecordMap = new HashMap<>();
 		p.forEach((k, v) -> {
 			String key = (String) k;
 			String value = (String) v;
+			int underscore = key.indexOf('_');
+			if (underscore < 0) {
+				return;
+			}
+			String type = key.substring(0, underscore);
+			String host = key.substring(underscore + 1);
 			try {
-				if (key.startsWith("ns_")) {
-					String host = key.substring(3);
-					Name origin = new Name(host.endsWith(".") ? host : host + ".");
-					ArrayList<Record> records = new ArrayList<>();
-					for (String target : value.split("[,;]")) {
-						records.add(new NSRecord(origin, DClass.IN, staticTtl,
-								new Name(target.endsWith(".") ? target : target + ".")));
-					}
-					if (!records.isEmpty()) {
-						nsRecords.put(host, records.toArray(EMPTY_RECORDS));
+				if (type.equals("a")) {
+					if (host.startsWith("*.")) {
+						updateRecords(aWildcards, host.substring(2), value, staticTtl, null);
+					} else {
+						updateRecords(aRecords, host, value, staticTtl, ptrRecordMap);
 					}
 					return;
 				}
-				if (key.startsWith("mx_")) {
-					String host = key.substring(3);
-					Name origin = new Name(host.endsWith(".") ? host : host + ".");
-					ArrayList<Record> records = new ArrayList<>();
-					for (String target : value.split("[,;]")) {
-						records.add(new MXRecord(origin, DClass.IN, staticTtl, mxPriority,
-								new Name(target.endsWith(".") ? target : target + ".")));
-					}
-					if (!records.isEmpty()) {
-						mxRecords.put(host, records.toArray(EMPTY_RECORDS));
-					}
+				Builder constructor = builderMap.get(type);
+				if (constructor == null) {
 					return;
 				}
-				if (key.startsWith("soa_")) {
-					String host = key.substring(4);
-					Name origin = new Name(host.endsWith(".") ? host : host + ".");
-					ArrayList<Record> records = new ArrayList<>();
-					for (String target : value.split("[,;]")) {
-						records.add(new SOARecord(origin, DClass.IN, staticTtl,
-								new Name(target.endsWith(".") ? target : target + "."),
-								soaAdmin, 1, staticTtl, staticTtl, staticTtl, staticTtl));
-					}
-					if (!records.isEmpty()) {
-						soaRecords.put(host, records.toArray(EMPTY_RECORDS));
-					}
-					return;
+				Name origin = new Name(host.endsWith(".") ? host : host + ".");
+				ArrayList<Record> records = new ArrayList<>();
+				for (String target : value.split("[,;]")) {
+					records.add(constructor.build(origin,
+							(type.equals("txt") || target.endsWith(".")) ?
+							target : target + "."));
 				}
-				if (!key.startsWith("a_")) {
-					return;
+				if (!records.isEmpty()) {
+					recordsMap.get(Type.class.getField(type.toUpperCase()).get(null)).
+							put(host, records.toArray(EMPTY_RECORDS));
 				}
-				String host = key.substring(2);
-				if (host.startsWith("*.")) {
-					updateRecords(aWildcards, host.substring(2), value, staticTtl, null);
-				} else {
-					updateRecords(aRecords, host, value, staticTtl, ptrRecordMap);
-				}
-			} catch (IOException e) {
+			} catch (IOException | ReflectiveOperationException e) {
 				Log.e(e);
 			}
 		});
@@ -388,22 +394,20 @@ public class DDNS {
 			}
 			answers = cloned;
 			break;
-		case Type.NS:
-		case Type.MX:
-		case Type.SOA:
-		case Type.PTR:
-			answers = (type == Type.NS ? nsRecords : type == Type.MX ? mxRecords :
-					type == Type.SOA ? soaRecords : ptrRecords).get(host);
-			if (answers != null) {
-				domain[0] = host;
-			}
-			break;
 		case Type.CAA:
 			answers = null;
 			break;
 		default:
-			header.setRcode(Rcode.NOTIMP);
-			return request;
+			HashMap<String, Record[]> records = recordsMap.get(Integer.valueOf(type));
+			if (records == null) {
+				header.setRcode(Rcode.NOTIMP);
+				return request;
+			}
+			answers = records.get(host);
+			if (answers != null) {
+				domain[0] = host;
+			}
+			break;
 		}
 		// AAAA: Convert IPv4 to IPv6
 		if (type == Type.AAAA && answers != null) {
