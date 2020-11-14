@@ -4,11 +4,11 @@
 	<modelVersion>4.0.0</modelVersion>
 	<groupId>com.xqbase</groupId>
 	<artifactId>xqbase-ddns</artifactId>
-	<version>0.2.1</version>
+	<version>0.2.2</version>
 	<packaging>jar</packaging>
 	<name>XQBase DDNS</name>
 	<description>XQBase Dynamic DNS Service</description>
-	<url>https://github.com/xqbase/tunnel</url>
+	<url>https://github.com/xqbase/ddns</url>
 
 	<licenses>
 		<license>
@@ -27,9 +27,9 @@
 	</developers>
 
 	<scm>
-		<connection>scm:git:git@github.com:xqbase/tunnel.git</connection>
-		<developerConnection>scm:git:git@github.com:xqbase/tunnel.git</developerConnection>
-		<url>https://github.com/xqbase/tunnel.git</url>
+		<connection>scm:git:git@github.com:xqbase/ddns.git</connection>
+		<developerConnection>scm:git:git@github.com:xqbase/ddns.git</developerConnection>
+		<url>https://github.com/xqbase/ddns.git</url>
 	</scm>
 
 	<properties>
