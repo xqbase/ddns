@@ -210,6 +210,7 @@ public class DDNS {
 		nsRecords.clear();
 		mxRecords.clear();
 		soaRecords.clear();
+		txtRecords.clear();
 		Properties p = Conf.load("DDNS");
 		verbose = Conf.getBoolean(p.getProperty("verbose"), false);
 		staticTtl = Numbers.parseInt(p.getProperty("ttl.static"), 3600);
